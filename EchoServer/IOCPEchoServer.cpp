@@ -13,16 +13,6 @@
 #define BUFSIZE		512
 #define THREADNUM	21
 
-struct SOCKETINFO
-{
-	OVERLAPPED overlapped;
-	SOCKET sock;
-	char buf[BUFSIZE + 1];
-	int recvbytes;
-	int sendbytes;
-	WSABUF wsabuf;
-};
-
 enum class IOType
 {
 	RECV,
