@@ -147,8 +147,17 @@ unsigned int WINAPI AcceptThread(LPVOID arg)
 			else
 			{
 				printf("[ERROR] accept: %d\n", errCode);
+				__debugbreak();
 			}
 			break;
+		}
+
+		// 비동기 send를 위한 송신 버퍼 크기 0으로 변경
+		int sendBufSize = 0;
+		if (setsockopt(client_sock, SOL_SOCKET, SO_SNDBUF, (const char*)&sendBufSize, sizeof(sendBufSize)) == SOCKET_ERROR)
+		{
+			printf("[ERROR] setsockopt(SNDBUF) 실패: %d\n", WSAGetLastError());
+			__debugbreak();
 		}
 
 		Session* ptr = new Session(client_sock, sessionIdCount++,
@@ -168,6 +177,7 @@ unsigned int WINAPI AcceptThread(LPVOID arg)
 			if (WSAGetLastError() != ERROR_IO_PENDING)
 			{
 				printf("[ERROR] WSARecv\n");
+				__debugbreak();
 			}
 			continue;
 		}
@@ -196,6 +206,7 @@ unsigned int WINAPI WorkerThread(LPVOID arg)
 		if (overlapped == NULL)
 		{
 			printf("[ERROR] GQCS Failed/Time Out: %d\n", WSAGetLastError());
+			__debugbreak();
 			continue;
 		}
 
@@ -207,6 +218,7 @@ unsigned int WINAPI WorkerThread(LPVOID arg)
 		else
 		{
 			printf("[ERROR] Overlapped Type Error\n");
+			__debugbreak();
 			break;
 		}
 
@@ -269,6 +281,10 @@ unsigned int WINAPI WorkerThread(LPVOID arg)
 				{
 					printf("[ERROR] WSASend: %d\n", WSAGetLastError());
 				}
+				else
+				{
+					printf("WSASend IO PENDING\n");
+				}
 			}
 
 			// WSARecv 재등록
@@ -294,6 +310,9 @@ unsigned int WINAPI WorkerThread(LPVOID arg)
 				if (WSAGetLastError() != WSA_IO_PENDING)
 				{
 					printf("[ERROR] WSARecv: %d\n", WSAGetLastError());
+				}
+				{
+					printf("WSARecv IO PENDING\n");
 				}
 			}
 		}
