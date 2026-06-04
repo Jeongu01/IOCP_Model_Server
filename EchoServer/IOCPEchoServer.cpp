@@ -281,10 +281,6 @@ unsigned int WINAPI WorkerThread(LPVOID arg)
 				{
 					printf("[ERROR] WSASend: %d\n", WSAGetLastError());
 				}
-				else
-				{
-					printf("WSASend IO PENDING\n");
-				}
 			}
 
 			// WSARecv Àçµî·Ï
@@ -310,9 +306,6 @@ unsigned int WINAPI WorkerThread(LPVOID arg)
 				if (WSAGetLastError() != WSA_IO_PENDING)
 				{
 					printf("[ERROR] WSARecv: %d\n", WSAGetLastError());
-				}
-				{
-					printf("WSARecv IO PENDING\n");
 				}
 			}
 		}
