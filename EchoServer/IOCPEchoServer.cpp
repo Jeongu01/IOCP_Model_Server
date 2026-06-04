@@ -40,6 +40,7 @@ struct Session
 	MyOverlapped sendOverlapped;
 	char ip[16];
 	USHORT port;
+	ULONG ioCount;
 
 	Session(SOCKET s, DWORD64 id, const char* ipAddr, SHORT port) :
 		sock(s),
@@ -48,7 +49,8 @@ struct Session
 		sendQ(BUFSIZE + 1),
 		recvOverlapped(IOType::RECV),
 		sendOverlapped(IOType::SEND),
-		port(port)
+		port(port),
+		ioCount(0)
 	{
 		strncpy_s(this->ip, ipAddr, _TRUNCATE);
 	}
@@ -56,6 +58,8 @@ struct Session
 
 HANDLE hcp;
 SOCKET listen_sock;
+
+void ReleaseSession(Session* session);
 
 unsigned int WINAPI AcceptThread(LPVOID arg);
 unsigned int WINAPI WorkerThread(LPVOID arg);
@@ -168,6 +172,7 @@ unsigned int WINAPI AcceptThread(LPVOID arg)
 
 		printf("[TCP 서버] 클라이언트 접속: IP 주소=%s, 포트 번호=%d\n", ptr->ip, ptr->port);
 
+		InterlockedIncrement(&ptr->ioCount);
 		flags = 0;
 		wsabuf.buf = ptr->recvQ.GetRearBufferPtr();
 		wsabuf.len = ptr->recvQ.DirectEnqueueSize();
@@ -176,7 +181,8 @@ unsigned int WINAPI AcceptThread(LPVOID arg)
 		{
 			if (WSAGetLastError() != ERROR_IO_PENDING)
 			{
-				printf("[ERROR] WSARecv\n");
+				printf("[ERROR] WSARecv: %d\n", WSAGetLastError());
+				ReleaseSession(ptr);
 				__debugbreak();
 			}
 			continue;
@@ -265,6 +271,7 @@ unsigned int WINAPI WorkerThread(LPVOID arg)
 
 			wsabuf[0].buf = session->sendQ.GetFrontBufferPtr();
 			wsabuf[0].len = sendQDirectSize;
+			InterlockedIncrement(&session->ioCount);
 			if (sendQUseSize == sendQDirectSize)
 			{
 				retval = WSASend(session->sock, wsabuf, 1, &sendbytes, 0, (OVERLAPPED*)&session->sendOverlapped, NULL);
@@ -280,6 +287,7 @@ unsigned int WINAPI WorkerThread(LPVOID arg)
 				if (WSAGetLastError() != WSA_IO_PENDING)
 				{
 					printf("[ERROR] WSASend: %d\n", WSAGetLastError());
+					ReleaseSession(session);
 				}
 			}
 
@@ -291,6 +299,7 @@ unsigned int WINAPI WorkerThread(LPVOID arg)
 
 			wsabuf[0].buf = session->recvQ.GetRearBufferPtr();
 			wsabuf[0].len = recvQDirectSize;
+			InterlockedIncrement(&session->ioCount);
 			if (recvQFreeSize == recvQDirectSize)
 			{
 				retval = WSARecv(session->sock, wsabuf, 1, &recvbytes, &flags, (OVERLAPPED*)&session->recvOverlapped, NULL);
@@ -306,6 +315,7 @@ unsigned int WINAPI WorkerThread(LPVOID arg)
 				if (WSAGetLastError() != WSA_IO_PENDING)
 				{
 					printf("[ERROR] WSARecv: %d\n", WSAGetLastError());
+					ReleaseSession(session);
 				}
 			}
 		}
@@ -316,4 +326,13 @@ unsigned int WINAPI WorkerThread(LPVOID arg)
 		}
 	}
 	return 0;
+}
+
+void ReleaseSession(Session* session)
+{
+	if (InterlockedDecrement(&session->ioCount) == 0)
+	{
+		closesocket(session->sock);
+		delete session;
+	}
 }
