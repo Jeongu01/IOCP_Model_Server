@@ -8,6 +8,7 @@
 #include <cstring>
 #include <RingBuffer.h>
 #include <conio.h>
+#include <unordered_map>
 
 #define SERVERPORT	6000
 #define BUFSIZE		512
@@ -59,7 +60,11 @@ struct Session
 HANDLE hcp;
 SOCKET listen_sock;
 
-void ReleaseSession(Session* session);
+std::unordered_map<ULONGLONG, Session*> sessionMap;
+SRWLOCK sessionMapLock;
+
+void ReleaseSession(ULONGLONG sessionID);
+Session* FindSession(ULONGLONG sessionID);
 
 unsigned int WINAPI AcceptThread(LPVOID arg);
 unsigned int WINAPI WorkerThread(LPVOID arg);
@@ -72,6 +77,8 @@ int main()
 
 	hcp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 10);
 	if (hcp == NULL) return 1;
+
+	InitializeSRWLock(&sessionMapLock);
 
 	HANDLE hThread[THREADNUM];
 	for (int i = 0; i < THREADNUM - 1; i++)
@@ -135,7 +142,7 @@ unsigned int WINAPI AcceptThread(LPVOID arg)
 	int addrlen;
 	WSABUF wsabuf;
 	DWORD recvbytes, flags;
-	DWORD64 sessionIdCount = 0;
+	DWORD64 sessionIDCount = 0;
 
 	while (1)
 	{
@@ -164,9 +171,12 @@ unsigned int WINAPI AcceptThread(LPVOID arg)
 			__debugbreak();
 		}
 
-		Session* ptr = new Session(client_sock, sessionIdCount++,
-			inet_ntoa(clientaddr.sin_addr), ntohs(clientaddr.sin_port));
+		Session* ptr = new Session(client_sock, sessionIDCount++, inet_ntoa(clientaddr.sin_addr), ntohs(clientaddr.sin_port));
 		if (ptr == NULL) break;
+
+		AcquireSRWLockShared(&sessionMapLock);
+		sessionMap[sessionIDCount++] = ptr;
+		ReleaseSRWLockShared(&sessionMapLock);
 
 		CreateIoCompletionPort((HANDLE)client_sock, hcp, ptr->sessionID, 0);
 
@@ -182,7 +192,7 @@ unsigned int WINAPI AcceptThread(LPVOID arg)
 			if (WSAGetLastError() != ERROR_IO_PENDING)
 			{
 				printf("[ERROR] WSARecv: %d\n", WSAGetLastError());
-				ReleaseSession(ptr);
+				ReleaseSession(ptr->sessionID);
 				__debugbreak();
 			}
 			continue;
@@ -244,9 +254,8 @@ unsigned int WINAPI WorkerThread(LPVOID arg)
 					printf("[ERROR] GQCS IO Failed : %d\n", errCode);
 				}
 			}
-			closesocket(session->sock);
 			printf("[TCP 서버] 클라이언트 종료: IP 주소=%s, 포트 번호=%d\n", session->ip, session->port);
-			delete session;
+			ReleaseSession(session->sessionID);
 			continue;
 		}
 
@@ -287,7 +296,7 @@ unsigned int WINAPI WorkerThread(LPVOID arg)
 				if (WSAGetLastError() != WSA_IO_PENDING)
 				{
 					printf("[ERROR] WSASend: %d\n", WSAGetLastError());
-					ReleaseSession(session);
+					ReleaseSession(session->sessionID);
 				}
 			}
 
@@ -315,7 +324,7 @@ unsigned int WINAPI WorkerThread(LPVOID arg)
 				if (WSAGetLastError() != WSA_IO_PENDING)
 				{
 					printf("[ERROR] WSARecv: %d\n", WSAGetLastError());
-					ReleaseSession(session);
+					ReleaseSession(session->sessionID);
 				}
 			}
 		}
@@ -328,10 +337,31 @@ unsigned int WINAPI WorkerThread(LPVOID arg)
 	return 0;
 }
 
-void ReleaseSession(Session* session)
+Session* FindSession(ULONGLONG sessionID)
 {
+	Session* session = nullptr;
+
+	AcquireSRWLockShared(&sessionMapLock);
+
+	auto iter = sessionMap.find(sessionID);
+	if (iter != sessionMap.end())
+	{
+		session = iter->second;
+	}
+
+	ReleaseSRWLockShared(&sessionMapLock);
+	return session;
+}
+
+void ReleaseSession(ULONGLONG sessionID)
+{
+	Session* session = FindSession(sessionID);
 	if (InterlockedDecrement(&session->ioCount) == 0)
 	{
+		AcquireSRWLockExclusive(&sessionMapLock);
+		sessionMap.erase(sessionID);
+		ReleaseSRWLockExclusive(&sessionMapLock);
+
 		closesocket(session->sock);
 		delete session;
 	}
