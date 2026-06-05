@@ -175,7 +175,7 @@ unsigned int WINAPI AcceptThread(LPVOID arg)
 		if (ptr == NULL) break;
 
 		AcquireSRWLockShared(&sessionMapLock);
-		sessionMap[sessionIDCount++] = ptr;
+		sessionMap[ptr->sessionID] = ptr;
 		ReleaseSRWLockShared(&sessionMapLock);
 
 		CreateIoCompletionPort((HANDLE)client_sock, hcp, ptr->sessionID, 0);
@@ -245,11 +245,7 @@ unsigned int WINAPI WorkerThread(LPVOID arg)
 			if (retval == FALSE)
 			{
 				int errCode = WSAGetLastError();
-				if (errCode == ERROR_NETNAME_DELETED)
-				{
-					printf("[TCP 서버] 클라이언트 비정상 종료\n");
-				}
-				else
+				if (errCode != ERROR_NETNAME_DELETED)
 				{
 					printf("[ERROR] GQCS IO Failed : %d\n", errCode);
 				}
