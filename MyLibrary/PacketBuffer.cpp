@@ -1,13 +1,13 @@
 #include "PacketBuffer.h"
 
-CPacket::CPacket()
+Packet::Packet()
 {
 	m_iBufferSize = eBUFFER_DEFAULT;
 	m_chpBuffer = new char[m_iBufferSize];
 	Clear();
 }
 
-CPacket::CPacket(int iBufferSize)
+Packet::Packet(int iBufferSize)
 {
 	if (iBufferSize <= 0)
 		iBufferSize = eBUFFER_DEFAULT;
@@ -17,19 +17,19 @@ CPacket::CPacket(int iBufferSize)
 	Clear();
 }
 
-CPacket::~CPacket()
+Packet::~Packet()
 {
 	delete[] m_chpBuffer;
 }
 
-void CPacket::Clear(void)
+void Packet::Clear(void)
 {
 	m_iDataSize = 0;
 	m_iReadPos = 0;
 	m_iWritePos = 0;
 }
 
-int CPacket::MoveWritePos(int iSize)
+int Packet::MoveWritePos(int iSize)
 {
 	if (iSize <= 0)
 		return 0;
@@ -44,7 +44,7 @@ int CPacket::MoveWritePos(int iSize)
 	return iSize;
 }
 
-int CPacket::MoveReadPos(int iSize)
+int Packet::MoveReadPos(int iSize)
 {
 	if (iSize <= 0)
 		return 0;
@@ -64,7 +64,7 @@ int CPacket::MoveReadPos(int iSize)
 	return iSize;
 }
 
-CPacket& CPacket::operator=(CPacket& clSrcPacket)
+Packet& Packet::operator=(Packet& clSrcPacket)
 {
 	if (&clSrcPacket == this)
 		return *this;
@@ -85,7 +85,7 @@ CPacket& CPacket::operator=(CPacket& clSrcPacket)
 	return *this;
 }
 
-int CPacket::GetData(char* chpDest, int iSize)
+int Packet::GetData(char* chpDest, int iSize)
 {
 	if (iSize <= 0)
 		return 0;
@@ -107,7 +107,7 @@ int CPacket::GetData(char* chpDest, int iSize)
 	return iSize;
 }
 
-int CPacket::PutData(char* chpSrc, int iSrcSize)
+int Packet::PutData(char* chpSrc, int iSrcSize)
 {
 	if (iSrcSize <= 0)
 		return 0;

@@ -13,7 +13,7 @@
 
 	- 사용법.
 
-	CPacket cPacket;  or CMessage Message;
+	Packet cPacket;  or CMessage Message;
 
 	넣기.
 	clPacket << 40030;		or	clPacket << iValue;	(int 넣기)
@@ -25,7 +25,7 @@
 	clPacket >> byValue;		(BYTE 빼기)
 	clPacket >> fValue;		(float 빼기)
 
-	CPacket Packet2;
+	Packet Packet2;
 
 	!.	삽입되는 데이타 FIFO 순서로 관리된다.
 		환형 큐는 아니므로, 넣기(<<).빼기(>>) 를 혼합해서 사용하지 않도록 한다
@@ -34,7 +34,7 @@
 
 	* 실제 패킷 프로시저에서의 처리
 
-	BOOL	netPacketProc_CreateMyCharacter(CPacket *clpPacket)
+	BOOL	netPacketProc_CreateMyCharacter(Packet *clpPacket)
 	{
 		DWORD dwSessionID;
 		short shX, shY;
@@ -57,12 +57,12 @@
 
 	* 실제 메시지(패킷) 생성부에서의 처리
 
-	CPacket MoveStart;
+	Packet MoveStart;
 	mpMoveStart(&MoveStart, dir, x, y);
 	SendPacket(&MoveStart);
 
 
-	void	mpMoveStart(CPacket *clpPacket, BYTE byDirection, short shX, short shY)
+	void	mpMoveStart(Packet *clpPacket, BYTE byDirection, short shX, short shY)
 	{
 		st_NETWORK_PACKET_HEADER	stPacketHeader;
 		stPacketHeader.byCode = dfNETWORK_PACKET_CODE;
@@ -82,7 +82,7 @@
 #define  __PACKET__
 #include <WinSock2.h>
 
-class CPacket
+class Packet
 {
 public:
 
@@ -100,10 +100,10 @@ public:
 	//
 	// Return:
 	//////////////////////////////////////////////////////////////////////////
-	CPacket();
-	CPacket(int iBufferSize);
+	Packet();
+	Packet(int iBufferSize);
 
-	virtual	~CPacket();
+	virtual	~Packet();
 
 
 	//////////////////////////////////////////////////////////////////////////
@@ -159,57 +159,57 @@ public:
 	/* ============================================================================= */
 	// 연산자 오버로딩
 	/* ============================================================================= */
-	CPacket& operator = (CPacket& clSrcPacket);
+	Packet& operator = (Packet& clSrcPacket);
 
 	//////////////////////////////////////////////////////////////////////////
 	// 넣기.	각 변수 타입마다 모두 만듬.
 	//////////////////////////////////////////////////////////////////////////
-	__forceinline CPacket& operator << (unsigned char byValue)
+	__forceinline Packet& operator << (unsigned char byValue)
 	{
 		_Push(&byValue, sizeof(byValue));
 		return *this;
 	}
-	__forceinline CPacket& operator << (char chValue) 
+	__forceinline Packet& operator << (char chValue) 
 	{
 		_Push(&chValue, sizeof(chValue));
 		return *this;
 	}
-	__forceinline CPacket& operator<<(short shValue)
+	__forceinline Packet& operator<<(short shValue)
 	{
 		_Push(&shValue, sizeof(shValue));
 		return *this;
 	}
-	__forceinline CPacket& operator<<(unsigned short wValue)
+	__forceinline Packet& operator<<(unsigned short wValue)
 	{
 		_Push(&wValue, sizeof(wValue));
 		return *this;
 	}
-	__forceinline CPacket& operator<<(int iValue)
+	__forceinline Packet& operator<<(int iValue)
 	{
 		_Push(&iValue, sizeof(iValue));
 		return *this;
 	}
-	__forceinline CPacket& operator<<(long lValue)
+	__forceinline Packet& operator<<(long lValue)
 	{
 		_Push(&lValue, sizeof(lValue));
 		return *this;
 	}
-	__forceinline CPacket& operator<<(unsigned long dwValue)
+	__forceinline Packet& operator<<(unsigned long dwValue)
 	{
 		_Push(&dwValue, sizeof(dwValue));
 		return *this;
 	}
-	__forceinline CPacket& operator<<(float fValue)
+	__forceinline Packet& operator<<(float fValue)
 	{
 		_Push(&fValue, sizeof(fValue));
 		return *this;
 	}
-	__forceinline CPacket& operator<<(__int64 iValue)
+	__forceinline Packet& operator<<(__int64 iValue)
 	{
 		_Push(&iValue, sizeof(iValue));
 		return *this;
 	}
-	__forceinline CPacket& operator<<(double dValue)
+	__forceinline Packet& operator<<(double dValue)
 	{
 		_Push(&dValue, sizeof(dValue));
 		return *this;
@@ -219,52 +219,52 @@ public:
 	// 빼기.	각 변수 타입마다 모두 만듬.
 	//////////////////////////////////////////////////////////////////////////
 
-	__forceinline CPacket& operator>>(BYTE& byValue)
+	__forceinline Packet& operator>>(BYTE& byValue)
 	{
 		_Pop(&byValue, sizeof(byValue));
 		return *this;
 	}
-	__forceinline CPacket& operator>>(char& chValue)
+	__forceinline Packet& operator>>(char& chValue)
 	{
 		_Pop(&chValue, sizeof(chValue));
 		return *this;
 	}
-	__forceinline CPacket& operator>>(short& shValue)
+	__forceinline Packet& operator>>(short& shValue)
 	{
 		_Pop(&shValue, sizeof(shValue));
 		return *this;
 	}
-	__forceinline CPacket& operator>>(WORD& wValue)
+	__forceinline Packet& operator>>(WORD& wValue)
 	{
 		_Pop(&wValue, sizeof(wValue));
 		return *this;
 	}
-	__forceinline CPacket& operator>>(int& iValue)
+	__forceinline Packet& operator>>(int& iValue)
 	{
 		_Pop(&iValue, sizeof(iValue));
 		return *this;
 	}
-	__forceinline CPacket& operator>>(long& lValue)
+	__forceinline Packet& operator>>(long& lValue)
 	{
 		_Pop(&lValue, sizeof(lValue));
 		return *this;
 	}
-	__forceinline CPacket& operator>>(DWORD& dwValue)
+	__forceinline Packet& operator>>(DWORD& dwValue)
 	{
 		_Pop(&dwValue, sizeof(dwValue));
 		return *this;
 	}
-	__forceinline CPacket& operator>>(float& fValue)
+	__forceinline Packet& operator>>(float& fValue)
 	{
 		_Pop(&fValue, sizeof(fValue));
 		return *this;
 	}
-	__forceinline CPacket& operator>>(__int64& iValue)
+	__forceinline Packet& operator>>(__int64& iValue)
 	{
 		_Pop(&iValue, sizeof(iValue));
 		return *this;
 	}
-	__forceinline CPacket& operator>>(double& dValue)
+	__forceinline Packet& operator>>(double& dValue)
 	{
 		_Pop(&dValue, sizeof(dValue));
 		return *this;
