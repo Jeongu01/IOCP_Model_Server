@@ -133,10 +133,12 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="..\MyLibrary\PacketBuffer.cpp" />
     <ClCompile Include="..\MyLibrary\RingBuffer.cpp" />
     <ClCompile Include="IOCPEchoServer.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="..\MyLibrary\PacketBuffer.h" />
     <ClInclude Include="..\MyLibrary\RingBuffer.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
