@@ -12,7 +12,7 @@
 #include <PacketBuffer.h>
 
 #define SERVERPORT	6000
-#define BUFSIZE		512
+#define BUFSIZE		498
 #define THREADNUM	21
 
 struct Header
