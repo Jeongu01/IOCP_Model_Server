@@ -48,6 +48,7 @@ struct Session
 	char ip[16];
 	USHORT port;
 	ULONG ioCount;
+	CRITICAL_SECTION cs;
 
 	Session(SOCKET s, DWORD64 id, const char* ipAddr, SHORT port) :
 		sock(s),
@@ -60,6 +61,7 @@ struct Session
 		ioCount(0)
 	{
 		strncpy_s(this->ip, ipAddr, _TRUNCATE);
+		InitializeCriticalSection(&cs);
 	}
 };
 
@@ -188,6 +190,8 @@ unsigned int WINAPI AcceptThread(LPVOID arg)
 		AcquireSRWLockShared(&sessionMapLock);
 		sessionMap[ptr->sessionID] = ptr;
 		ReleaseSRWLockShared(&sessionMapLock);
+		
+		EnterCriticalSection(&ptr->cs);
 
 		CreateIoCompletionPort((HANDLE)client_sock, hcp, ptr->sessionID, 0);
 
@@ -298,6 +302,9 @@ Session* FindSession(ULONGLONG sessionID)
 void ReleaseSession(ULONGLONG sessionID)
 {
 	Session* session = FindSession(sessionID);
+	if (session == nullptr)
+		return;
+
 	if (InterlockedDecrement(&session->ioCount) == 0)
 	{
 		AcquireSRWLockExclusive(&sessionMapLock);
@@ -305,6 +312,7 @@ void ReleaseSession(ULONGLONG sessionID)
 		ReleaseSRWLockExclusive(&sessionMapLock);
 
 		closesocket(session->sock);
+		DeleteCriticalSection(&session->cs);
 		delete session;
 	}
 }
@@ -312,6 +320,8 @@ void ReleaseSession(ULONGLONG sessionID)
 void RecvProc(Session* session, DWORD cbTransferred)
 {
 	int retval;
+
+	EnterCriticalSection(&session->cs);
 	session->recvQ.MoveRear(cbTransferred);
 
 	while (true)
@@ -361,12 +371,18 @@ void RecvProc(Session* session, DWORD cbTransferred)
 			}
 		}
 	}
+
+	LeaveCriticalSection(&session->cs);
 }
 
 void SendProc(Session* session, DWORD cbTransferred)
 {
+	EnterCriticalSection(&session->cs);
+
 	// SendQ ÈÄÃ³¸®
 	session->sendQ.MoveFront(cbTransferred);
+
+	LeaveCriticalSection(&session->cs);
 }
 
 void OnRecv(ULONGLONG sessionID, Packet& packet)
@@ -383,8 +399,11 @@ void OnRecv(ULONGLONG sessionID, Packet& packet)
 void SendPacket(ULONGLONG sessionID, Packet& packet)
 {
 	int retval;
-
 	Session* session = FindSession(sessionID);
+	if (session == nullptr)
+		return;
+
+	EnterCriticalSection(&session->cs);
 
 	Header header;
 	header.len = packet.GetDataSize();
@@ -418,4 +437,6 @@ void SendPacket(ULONGLONG sessionID, Packet& packet)
 			ReleaseSession(session->sessionID);
 		}
 	}
+
+	LeaveCriticalSection(&session->cs);
 }
