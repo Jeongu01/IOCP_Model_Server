@@ -190,8 +190,6 @@ unsigned int WINAPI AcceptThread(LPVOID arg)
 		AcquireSRWLockShared(&sessionMapLock);
 		sessionMap[ptr->sessionID] = ptr;
 		ReleaseSRWLockShared(&sessionMapLock);
-		
-		EnterCriticalSection(&ptr->cs);
 
 		CreateIoCompletionPort((HANDLE)client_sock, hcp, ptr->sessionID, 0);
 
