@@ -374,7 +374,7 @@ void OnRecv(ULONGLONG sessionID, Packet& packet)
 	INT64 echo;
 	packet >> echo;
 	Session* session = FindSession(sessionID);
-	printf("[TCP/%s:%lld] %d\n", session->ip, session->port, echo);
+	printf("[TCP/%s:%d] %lld\n", session->ip, session->port, echo);
 	Packet sendPacket = Packet(BUFSIZE + 1);
 	sendPacket << echo;
 	SendPacket(sessionID, sendPacket);
