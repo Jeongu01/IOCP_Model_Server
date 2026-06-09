@@ -341,34 +341,34 @@ void RecvProc(Session* session, DWORD cbTransferred)
 		session->recvQ.MoveFront(header.len);
 
 		OnRecv(session->sessionID, recvPacket);
+	}
 
-		// WSARecv 재등록
-		WSABUF wsabuf[2];
-		DWORD recvbytes;
-		DWORD flags = 0;
-		int recvQFreeSize = session->recvQ.GetFreeSize();
-		int recvQDirectSize = session->recvQ.DirectEnqueueSize();
+	// WSARecv 재등록
+	WSABUF wsabuf[2];
+	DWORD recvbytes;
+	DWORD flags = 0;
+	int recvQFreeSize = session->recvQ.GetFreeSize();
+	int recvQDirectSize = session->recvQ.DirectEnqueueSize();
 
-		wsabuf[0].buf = session->recvQ.GetRearBufferPtr();
-		wsabuf[0].len = recvQDirectSize;
-		InterlockedIncrement(&session->ioCount);
-		if (recvQFreeSize == recvQDirectSize)
+	wsabuf[0].buf = session->recvQ.GetRearBufferPtr();
+	wsabuf[0].len = recvQDirectSize;
+	InterlockedIncrement(&session->ioCount);
+	if (recvQFreeSize == recvQDirectSize)
+	{
+		retval = WSARecv(session->sock, wsabuf, 1, &recvbytes, &flags, (OVERLAPPED*)&session->recvOverlapped, NULL);
+	}
+	else if (recvQFreeSize > recvQDirectSize)
+	{
+		wsabuf[1].buf = session->recvQ.GetBufferPtr();
+		wsabuf[1].len = recvQFreeSize - recvQDirectSize;
+		retval = WSARecv(session->sock, wsabuf, 2, &recvbytes, &flags, (OVERLAPPED*)&session->recvOverlapped, NULL);
+	}
+	if (retval == SOCKET_ERROR)
+	{
+		if (WSAGetLastError() != WSA_IO_PENDING)
 		{
-			retval = WSARecv(session->sock, wsabuf, 1, &recvbytes, &flags, (OVERLAPPED*)&session->recvOverlapped, NULL);
-		}
-		else if (recvQFreeSize > recvQDirectSize)
-		{
-			wsabuf[1].buf = session->recvQ.GetBufferPtr();
-			wsabuf[1].len = recvQFreeSize - recvQDirectSize;
-			retval = WSARecv(session->sock, wsabuf, 2, &recvbytes, &flags, (OVERLAPPED*)&session->recvOverlapped, NULL);
-		}
-		if (retval == SOCKET_ERROR)
-		{
-			if (WSAGetLastError() != WSA_IO_PENDING)
-			{
-				printf("[ERROR] WSARecv: %d\n", WSAGetLastError());
-				ReleaseSession(session->sessionID);
-			}
+			printf("[ERROR] WSARecv: %d\n", WSAGetLastError());
+			ReleaseSession(session->sessionID);
 		}
 	}
 
