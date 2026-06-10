@@ -48,17 +48,21 @@ struct Session
 	char ip[16];
 	USHORT port;
 	ULONG ioCount;
+	LONG isSending;
 	CRITICAL_SECTION cs;
 
 	Session(SOCKET s, DWORD64 id, const char* ipAddr, SHORT port) :
 		sock(s),
 		sessionID(id),
-		recvQ(BUFSIZE + 1),
-		sendQ(BUFSIZE + 1),
+		//recvQ(BUFSIZE + 1),
+		//sendQ(BUFSIZE + 1),
+		recvQ(999),
+		sendQ(499),
 		recvOverlapped(IOType::RECV),
 		sendOverlapped(IOType::SEND),
 		port(port),
-		ioCount(0)
+		ioCount(0),
+		isSending(FALSE)
 	{
 		strncpy_s(this->ip, ipAddr, _TRUNCATE);
 		InitializeCriticalSection(&cs);
@@ -176,6 +180,16 @@ unsigned int WINAPI AcceptThread(LPVOID arg)
 			break;
 		}
 
+		// 링거 설정
+		LINGER linger;
+		linger.l_onoff = 1;
+		linger.l_linger = 0;
+		if (setsockopt(client_sock, SOL_SOCKET, SO_LINGER, (const char*)&linger, sizeof(linger)) == SOCKET_ERROR)
+		{
+			printf("[ERROR] setsockopt(LINGER) 실패: %d\n", WSAGetLastError());
+			__debugbreak();
+		}
+
 		// 비동기 send를 위한 송신 버퍼 크기 0으로 변경
 		int sendBufSize = 0;
 		if (setsockopt(client_sock, SOL_SOCKET, SO_SNDBUF, (const char*)&sendBufSize, sizeof(sendBufSize)) == SOCKET_ERROR)
@@ -205,7 +219,8 @@ unsigned int WINAPI AcceptThread(LPVOID arg)
 			if (WSAGetLastError() != ERROR_IO_PENDING)
 			{
 				printf("[ERROR] WSARecv: %d\n", WSAGetLastError());
-				ReleaseSession(ptr->sessionID);
+				if (InterlockedDecrement(&ptr->ioCount) == 0)
+					ReleaseSession(ptr->sessionID);
 				__debugbreak();
 			}
 			continue;
@@ -251,6 +266,8 @@ unsigned int WINAPI WorkerThread(LPVOID arg)
 			break;
 		}
 
+		EnterCriticalSection(&session->cs);
+
 		// 에러 및 끊김 처리
 		if (retval == FALSE || cbTransferred == 0)
 		{
@@ -264,7 +281,9 @@ unsigned int WINAPI WorkerThread(LPVOID arg)
 				}
 			}
 			printf("[TCP 서버] 클라이언트 종료: IP 주소=%s, 포트 번호=%d\n", session->ip, session->port);
-			ReleaseSession(session->sessionID);
+			LeaveCriticalSection(&session->cs);
+			if (InterlockedDecrement(&session->ioCount) == 0)
+				ReleaseSession(session->sessionID);
 			continue;
 		}
 
@@ -277,6 +296,8 @@ unsigned int WINAPI WorkerThread(LPVOID arg)
 		{
 			SendProc(session, cbTransferred);
 		}
+
+		LeaveCriticalSection(&session->cs);
 	}
 	return 0;
 }
@@ -303,20 +324,20 @@ void ReleaseSession(ULONGLONG sessionID)
 	if (session == nullptr)
 		return;
 
-	if (InterlockedDecrement(&session->ioCount) == 0)
-	{
-		AcquireSRWLockExclusive(&sessionMapLock);
-		sessionMap.erase(sessionID);
-		ReleaseSRWLockExclusive(&sessionMapLock);
+	AcquireSRWLockExclusive(&sessionMapLock);
+	sessionMap.erase(sessionID);
+	ReleaseSRWLockExclusive(&sessionMapLock);
 
-		closesocket(session->sock);
-		DeleteCriticalSection(&session->cs);
-		delete session;
-	}
+	closesocket(session->sock);
+	DeleteCriticalSection(&session->cs);
+	delete session;
+	session = nullptr;
+	return;
 }
 
 void RecvProc(Session* session, DWORD cbTransferred)
 {
+	printf("[DEBUG] 수신 바이트 수: %d\n", cbTransferred);
 	int retval;
 
 	EnterCriticalSection(&session->cs);
@@ -350,7 +371,6 @@ void RecvProc(Session* session, DWORD cbTransferred)
 
 	wsabuf[0].buf = session->recvQ.GetRearBufferPtr();
 	wsabuf[0].len = recvQDirectSize;
-	InterlockedIncrement(&session->ioCount);
 	if (recvQFreeSize == recvQDirectSize)
 	{
 		retval = WSARecv(session->sock, wsabuf, 1, &recvbytes, &flags, (OVERLAPPED*)&session->recvOverlapped, NULL);
@@ -363,10 +383,20 @@ void RecvProc(Session* session, DWORD cbTransferred)
 	}
 	if (retval == SOCKET_ERROR)
 	{
-		if (WSAGetLastError() != WSA_IO_PENDING)
+		int errCode = WSAGetLastError();
+		if (errCode != WSA_IO_PENDING)
 		{
-			printf("[ERROR] WSARecv: %d\n", WSAGetLastError());
-			ReleaseSession(session->sessionID);
+			if (errCode != WSAECONNRESET)
+			{
+				printf("[ERROR] WSARecv: %d\n", errCode);
+				__debugbreak();
+			}
+			if (InterlockedDecrement(&session->ioCount) == 0)
+			{
+				LeaveCriticalSection(&session->cs);
+				ReleaseSession(session->sessionID);
+				return;
+			}
 		}
 	}
 
@@ -375,10 +405,63 @@ void RecvProc(Session* session, DWORD cbTransferred)
 
 void SendProc(Session* session, DWORD cbTransferred)
 {
+	printf("[DEBUG] 송신 바이트 수: %d\n", cbTransferred);
+
+	if (InterlockedDecrement(&session->ioCount) == 0)
+	{
+		ReleaseSession(session->sessionID);
+		return;
+	}
+
 	EnterCriticalSection(&session->cs);
 
 	// SendQ 후처리
 	session->sendQ.MoveFront(cbTransferred);
+
+	if (session->sendQ.GetUseSize() > 0)
+	{
+		int retval;
+		DWORD sendbytes;
+		WSABUF wsabuf[2];
+		int sendQUseSize = session->sendQ.GetUseSize();
+		int sendQDirectSize = session->sendQ.DirectDequeueSize();
+
+		wsabuf[0].buf = session->sendQ.GetFrontBufferPtr();
+		wsabuf[0].len = sendQDirectSize;
+		InterlockedIncrement(&session->ioCount);
+		if (sendQUseSize == sendQDirectSize)
+		{
+			retval = WSASend(session->sock, wsabuf, 1, &sendbytes, 0, (OVERLAPPED*)&session->sendOverlapped, NULL);
+		}
+		else if (sendQUseSize > sendQDirectSize)
+		{
+			wsabuf[1].buf = session->sendQ.GetBufferPtr();
+			wsabuf[1].len = sendQUseSize - sendQDirectSize;
+			retval = WSASend(session->sock, wsabuf, 2, &sendbytes, 0, (OVERLAPPED*)&session->sendOverlapped, NULL);
+		}
+		if (retval == SOCKET_ERROR)
+		{
+			int errCode = WSAGetLastError();
+			if (errCode != WSA_IO_PENDING)
+			{
+				if (errCode != WSAECONNRESET)
+				{
+					printf("[ERROR] WSASend: %d\n", errCode);
+					__debugbreak();
+				}
+				if (InterlockedDecrement(&session->ioCount) == 0)
+				{
+					LeaveCriticalSection(&session->cs);
+					ReleaseSession(session->sessionID);
+					return;
+				}
+			}
+		}
+	}
+	else
+	{
+		session->isSending = FALSE;
+	}
 
 	LeaveCriticalSection(&session->cs);
 }
@@ -409,30 +492,43 @@ void SendPacket(ULONGLONG sessionID, Packet& packet)
 	session->sendQ.Enqueue(packet.GetReadPtr(), header.len);
 	packet.MoveReadPos(header.len);
 
-	DWORD sendbytes;
-	WSABUF wsabuf[2];
-	int sendQUseSize = session->sendQ.GetUseSize();
-	int sendQDirectSize = session->sendQ.DirectDequeueSize();
+	if (InterlockedExchange(&session->isSending, TRUE) == FALSE)
+	{
+		DWORD sendbytes;
+		WSABUF wsabuf[2];
+		int sendQUseSize = session->sendQ.GetUseSize();
+		int sendQDirectSize = session->sendQ.DirectDequeueSize();
 
-	wsabuf[0].buf = session->sendQ.GetFrontBufferPtr();
-	wsabuf[0].len = sendQDirectSize;
-	InterlockedIncrement(&session->ioCount);
-	if (sendQUseSize == sendQDirectSize)
-	{
-		retval = WSASend(session->sock, wsabuf, 1, &sendbytes, 0, (OVERLAPPED*)&session->sendOverlapped, NULL);
-	}
-	else if (sendQUseSize > sendQDirectSize)
-	{
-		wsabuf[1].buf = session->sendQ.GetBufferPtr();
-		wsabuf[1].len = sendQUseSize - sendQDirectSize;
-		retval = WSASend(session->sock, wsabuf, 2, &sendbytes, 0, (OVERLAPPED*)&session->sendOverlapped, NULL);
-	}
-	if (retval == SOCKET_ERROR)
-	{
-		if (WSAGetLastError() != WSA_IO_PENDING)
+		wsabuf[0].buf = session->sendQ.GetFrontBufferPtr();
+		wsabuf[0].len = sendQDirectSize;
+		InterlockedIncrement(&session->ioCount);
+		if (sendQUseSize == sendQDirectSize)
 		{
-			printf("[ERROR] WSASend: %d\n", WSAGetLastError());
-			ReleaseSession(session->sessionID);
+			retval = WSASend(session->sock, wsabuf, 1, &sendbytes, 0, (OVERLAPPED*)&session->sendOverlapped, NULL);
+		}
+		else if (sendQUseSize > sendQDirectSize)
+		{
+			wsabuf[1].buf = session->sendQ.GetBufferPtr();
+			wsabuf[1].len = sendQUseSize - sendQDirectSize;
+			retval = WSASend(session->sock, wsabuf, 2, &sendbytes, 0, (OVERLAPPED*)&session->sendOverlapped, NULL);
+		}
+		if (retval == SOCKET_ERROR)
+		{
+			int errCode = WSAGetLastError();
+			if (errCode != WSA_IO_PENDING)
+			{
+				if (errCode != WSAECONNRESET)
+				{
+					printf("[ERROR] WSASend: %d\n", errCode);
+					__debugbreak();
+				}
+				if (InterlockedDecrement(&session->ioCount) == 0)
+				{
+					LeaveCriticalSection(&session->cs);
+					ReleaseSession(session->sessionID);
+					return;
+				}
+			}
 		}
 	}
 
