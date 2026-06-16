@@ -12,7 +12,7 @@
 #include <PacketBuffer.h>
 
 #define SERVERPORT	6000
-#define BUFSIZE		498
+#define BUFSIZE		2000
 #define THREADNUM	21
 
 struct Header
@@ -54,10 +54,8 @@ struct Session
 	Session(SOCKET s, DWORD64 id, const char* ipAddr, SHORT port) :
 		sock(s),
 		sessionID(id),
-		//recvQ(BUFSIZE + 1),
-		//sendQ(BUFSIZE + 1),
-		recvQ(999),
-		sendQ(499),
+		recvQ(BUFSIZE + 1),
+		sendQ(BUFSIZE + 1),
 		recvOverlapped(IOType::RECV),
 		sendOverlapped(IOType::SEND),
 		port(port),
@@ -337,7 +335,6 @@ void ReleaseSession(ULONGLONG sessionID)
 
 void RecvProc(Session* session, DWORD cbTransferred)
 {
-	printf("[DEBUG] 수신 바이트 수: %d\n", cbTransferred);
 	int retval;
 
 	EnterCriticalSection(&session->cs);
@@ -356,8 +353,8 @@ void RecvProc(Session* session, DWORD cbTransferred)
 		session->recvQ.MoveFront(sizeof(Header));
 
 		Packet recvPacket;
-		recvPacket.PutData(session->recvQ.GetFrontBufferPtr(), header.len);
-		session->recvQ.MoveFront(header.len);
+		session->recvQ.Dequeue(recvPacket.GetWritePtr(), header.len);
+		recvPacket.MoveWritePos(header.len);
 
 		OnRecv(session->sessionID, recvPacket);
 	}
@@ -405,62 +402,62 @@ void RecvProc(Session* session, DWORD cbTransferred)
 
 void SendProc(Session* session, DWORD cbTransferred)
 {
-	printf("[DEBUG] 송신 바이트 수: %d\n", cbTransferred);
-
-	if (InterlockedDecrement(&session->ioCount) == 0)
-	{
-		ReleaseSession(session->sessionID);
-		return;
-	}
-
 	EnterCriticalSection(&session->cs);
 
 	// SendQ 후처리
 	session->sendQ.MoveFront(cbTransferred);
+	
+	session->isSending = FALSE;
 
 	if (session->sendQ.GetUseSize() > 0)
 	{
-		int retval;
-		DWORD sendbytes;
-		WSABUF wsabuf[2];
-		int sendQUseSize = session->sendQ.GetUseSize();
-		int sendQDirectSize = session->sendQ.DirectDequeueSize();
+		if (InterlockedExchange(&session->isSending, TRUE) == FALSE)
+		{
+			int retval;
+			DWORD sendbytes;
+			WSABUF wsabuf[2];
+			int sendQUseSize = session->sendQ.GetUseSize();
+			int sendQDirectSize = session->sendQ.DirectDequeueSize();
 
-		wsabuf[0].buf = session->sendQ.GetFrontBufferPtr();
-		wsabuf[0].len = sendQDirectSize;
-		InterlockedIncrement(&session->ioCount);
-		if (sendQUseSize == sendQDirectSize)
-		{
-			retval = WSASend(session->sock, wsabuf, 1, &sendbytes, 0, (OVERLAPPED*)&session->sendOverlapped, NULL);
-		}
-		else if (sendQUseSize > sendQDirectSize)
-		{
-			wsabuf[1].buf = session->sendQ.GetBufferPtr();
-			wsabuf[1].len = sendQUseSize - sendQDirectSize;
-			retval = WSASend(session->sock, wsabuf, 2, &sendbytes, 0, (OVERLAPPED*)&session->sendOverlapped, NULL);
-		}
-		if (retval == SOCKET_ERROR)
-		{
-			int errCode = WSAGetLastError();
-			if (errCode != WSA_IO_PENDING)
+			wsabuf[0].buf = session->sendQ.GetFrontBufferPtr();
+			wsabuf[0].len = sendQDirectSize;
+			InterlockedIncrement(&session->ioCount);
+			if (sendQUseSize == sendQDirectSize)
 			{
-				if (errCode != WSAECONNRESET)
+				retval = WSASend(session->sock, wsabuf, 1, &sendbytes, 0, (OVERLAPPED*)&session->sendOverlapped, NULL);
+			}
+			else if (sendQUseSize > sendQDirectSize)
+			{
+				wsabuf[1].buf = session->sendQ.GetBufferPtr();
+				wsabuf[1].len = sendQUseSize - sendQDirectSize;
+				retval = WSASend(session->sock, wsabuf, 2, &sendbytes, 0, (OVERLAPPED*)&session->sendOverlapped, NULL);
+			}
+			if (retval == SOCKET_ERROR)
+			{
+				int errCode = WSAGetLastError();
+				if (errCode != WSA_IO_PENDING)
 				{
-					printf("[ERROR] WSASend: %d\n", errCode);
-					__debugbreak();
-				}
-				if (InterlockedDecrement(&session->ioCount) == 0)
-				{
-					LeaveCriticalSection(&session->cs);
-					ReleaseSession(session->sessionID);
-					return;
+					if (errCode != WSAECONNRESET)
+					{
+						printf("[ERROR] WSASend: %d\n", errCode);
+						__debugbreak();
+					}
+					if (InterlockedDecrement(&session->ioCount) == 0)
+					{
+						LeaveCriticalSection(&session->cs);
+						ReleaseSession(session->sessionID);
+						return;
+					}
 				}
 			}
 		}
 	}
-	else
+
+	if (InterlockedDecrement(&session->ioCount) == 0)
 	{
-		session->isSending = FALSE;
+		LeaveCriticalSection(&session->cs);
+		ReleaseSession(session->sessionID);
+		return;
 	}
 
 	LeaveCriticalSection(&session->cs);
