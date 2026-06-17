@@ -302,29 +302,25 @@ unsigned int WINAPI WorkerThread(LPVOID arg)
 
 Session* FindSession(ULONGLONG sessionID)
 {
-	Session* session = nullptr;
-
-	AcquireSRWLockShared(&sessionMapLock);
-
 	auto iter = sessionMap.find(sessionID);
-	if (iter != sessionMap.end())
-	{
-		session = iter->second;
-	}
+	if (iter == sessionMap.end())
+		return nullptr;
 
-	ReleaseSRWLockShared(&sessionMapLock);
-	return session;
+	return iter->second;
 }
 
 void ReleaseSession(ULONGLONG sessionID)
 {
+	AcquireSRWLockExclusive(&sessionMapLock);
 	Session* session = FindSession(sessionID);
 	if (session == nullptr)
 		return;
 
-	AcquireSRWLockExclusive(&sessionMapLock);
 	sessionMap.erase(sessionID);
 	ReleaseSRWLockExclusive(&sessionMapLock);
+
+	EnterCriticalSection(&session->cs);
+	LeaveCriticalSection(&session->cs);
 
 	closesocket(session->sock);
 	DeleteCriticalSection(&session->cs);
@@ -467,8 +463,13 @@ void OnRecv(ULONGLONG sessionID, Packet& packet)
 {
 	INT64 echo;
 	packet >> echo;
+
+	AcquireSRWLockShared(&sessionMapLock);
 	Session* session = FindSession(sessionID);
+	ReleaseSRWLockShared(&sessionMapLock);
+
 	printf("[TCP/%s:%d] %lld\n", session->ip, session->port, echo);
+
 	Packet sendPacket = Packet(BUFSIZE + 1);
 	sendPacket << echo;
 	SendPacket(sessionID, sendPacket);
@@ -477,11 +478,12 @@ void OnRecv(ULONGLONG sessionID, Packet& packet)
 void SendPacket(ULONGLONG sessionID, Packet& packet)
 {
 	int retval;
+	AcquireSRWLockExclusive(&sessionMapLock);
+
 	Session* session = FindSession(sessionID);
-	if (session == nullptr)
-		return;
 
 	EnterCriticalSection(&session->cs);
+	ReleaseSRWLockExclusive(&sessionMapLock);
 
 	Header header;
 	header.len = packet.GetDataSize();
