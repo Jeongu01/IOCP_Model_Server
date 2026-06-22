@@ -18,18 +18,24 @@
     <ClCompile Include="IOCPEchoServer.cpp">
       <Filter>소스 파일</Filter>
     </ClCompile>
-    <ClCompile Include="..\MyLibrary\RingBuffer.cpp">
+    <ClCompile Include="..\..\MyLibrary\PacketBuffer.cpp">
       <Filter>소스 파일</Filter>
     </ClCompile>
-    <ClCompile Include="..\MyLibrary\PacketBuffer.cpp">
+    <ClCompile Include="..\..\MyLibrary\RingBuffer.cpp">
+      <Filter>소스 파일</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\MyLibrary\CrashDump.cpp">
       <Filter>소스 파일</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="..\MyLibrary\RingBuffer.h">
+    <ClInclude Include="..\..\MyLibrary\CrashDump.h">
       <Filter>소스 파일</Filter>
     </ClInclude>
-    <ClInclude Include="..\MyLibrary\PacketBuffer.h">
+    <ClInclude Include="..\..\MyLibrary\PacketBuffer.h">
+      <Filter>소스 파일</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\MyLibrary\RingBuffer.h">
       <Filter>소스 파일</Filter>
     </ClInclude>
   </ItemGroup>

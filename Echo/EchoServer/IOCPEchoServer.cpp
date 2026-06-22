@@ -10,6 +10,7 @@
 #include <conio.h>
 #include <unordered_map>
 #include <PacketBuffer.h>
+#include <CrashDump.h>
 
 #define SERVERPORT	6000
 #define BUFSIZE		2000
@@ -86,6 +87,8 @@ unsigned int WINAPI WorkerThread(LPVOID arg);
 
 int main()
 {
+	jeongu::CrashDump crashHandler;
+
 	WSADATA wsa;
 	if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0)
 		return 1;
