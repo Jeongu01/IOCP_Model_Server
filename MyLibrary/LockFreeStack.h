@@ -15,13 +15,14 @@ struct Log
 {
 	Action type;
 	int threadID;
-	void* nodeAddr;
-	void* nextAddr;
+	DWORD64 nodeAddr;
+	DWORD64 nextAddr;
+	DWORD64 data;
 };
 
 static Log logArr[10000];
-static long logIdx = 0;
-static void write(Action type, void* ptr1, void* ptr2, int data = 0)
+static DWORD64 logIdx = 0;
+static void write(Action type, DWORD64 ptr1, DWORD64 ptr2, DWORD data = 0)
 {
 	unsigned int idx = InterlockedIncrement(&logIdx) % 10000;
 	Log log;
@@ -29,6 +30,7 @@ static void write(Action type, void* ptr1, void* ptr2, int data = 0)
 	log.threadID = GetCurrentThreadId();
 	log.nodeAddr = ptr1;
 	log.nextAddr = ptr2;
+	log.data = data;
 	logArr[idx] = log;
 }
 
@@ -42,52 +44,88 @@ private:
 		Node* _Next = nullptr;
 	};
 
+	static const DWORD64 PTR_MASK = 0x00007fffffffffff;
+	static const int TAG_SHIFT = 47;
+	static const DWORD64 TAG_MASK = 0x1ffff;
+
+	inline Node* GetPointer(DWORD64 taggedPtr)
+	{
+		return (Node*)(taggedPtr & PTR_MASK);
+	}
+
+	inline DWORD64 GetTag(DWORD64 taggedPtr)
+	{
+		return (taggedPtr >> TAG_SHIFT) & TAG_MASK;
+	}
+
+	inline DWORD64 MakeTagged(DWORD64 tag, Node* ptr)
+	{
+		return ((tag & TAG_MASK) << TAG_SHIFT) | ((DWORD64)(ptr) & PTR_MASK);
+	}
+
 public:
-	LockFreeStack() : _Top(nullptr) {}
+	LockFreeStack() : _Top(0) {}
 	~LockFreeStack() 
 	{
-		while (_Top)
+		Node* current = GetPointer(_Top);
+		while (current)
 		{
-			Node* next = _Top->_Next;
-			delete _Top;
-			_Top = next;
+			Node* next = current->_Next;
+			delete current;
+			current = next;
 		}
 	}
 
 	void Push(T data)
 	{
-		Node* newNode = new Node();
+		Node* newNode = new Node();	// 추후 메모리풀로 변경
 		newNode->_Data = data;
-		Node* currentTop = nullptr;
+
+		Node* currentTopPtr = nullptr;
+		DWORD64 currentTopTagged = 0;
+		DWORD64 newTopTagged = 0;
+		DWORD64 nextTag = 0;
+
 		do
 		{
-			currentTop = _Top;
-			newNode->_Next = currentTop;
-			write(PUSH_TRY, newNode, newNode->_Next);
-		} while (InterlockedCompareExchangePointer((volatile PVOID*)&_Top, newNode, currentTop) != currentTop);
-		write(PUSH_SUC, newNode, newNode->_Next);
+			currentTopTagged = _Top;
+			currentTopPtr = GetPointer(currentTopTagged);
+			newNode->_Next = currentTopPtr;
+			
+			nextTag = GetTag(currentTopTagged) + 1;
+			newTopTagged = MakeTagged(nextTag, newNode);
+			write(PUSH_TRY, newTopTagged, currentTopTagged);
+		} while (InterlockedCompareExchange(&_Top, newTopTagged, currentTopTagged) != currentTopTagged);
+		write(PUSH_SUC, newTopTagged, currentTopTagged);
 	}
 
 	bool Pop(T* ret)
 	{
-		Node* popNode = nullptr;
-		Node* newTop = nullptr;
+		DWORD64 oldTopTagged = 0;
+		DWORD64 nextTopTagged = 0;
+		Node* oldTopPtr = nullptr;
+		Node* nextTopPtr = nullptr;
+		DWORD64 nextTopTag = 0;
 
-		write(POP_STR, nullptr, 0);
+		write(POP_STR, 0, 0);
 		do
 		{
-			popNode = _Top;
-			if (popNode == nullptr)
+			oldTopTagged = _Top;
+			oldTopPtr = GetPointer(oldTopTagged);
+			if (oldTopPtr == nullptr)
 				return false;
-			newTop = popNode->_Next;
-			write(POP_TRY, popNode, newTop);
-		} while (InterlockedCompareExchangePointer((volatile PVOID*)&_Top, newTop, popNode) != popNode);
-		write(POP_SUC, popNode, newTop);
-		(*ret) = popNode->_Data;
-		delete popNode;
+
+			nextTopPtr = oldTopPtr->_Next;
+			nextTopTag = GetTag(oldTopTagged) + 1;
+			nextTopTagged = MakeTagged(nextTopTag, nextTopPtr);
+			write(POP_TRY, oldTopTagged, nextTopTagged);
+		} while (InterlockedCompareExchange(&_Top, nextTopTagged, oldTopTagged) != oldTopTagged);
+		write(POP_SUC, oldTopTagged, nextTopTagged, oldTopPtr->_Data);
+		(*ret) = oldTopPtr->_Data;
+		delete oldTopPtr;
 		return true;
 	}
 
 private:
-	Node* _Top;
+	volatile DWORD64 _Top;
 };
