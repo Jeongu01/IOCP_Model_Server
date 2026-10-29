@@ -4,7 +4,8 @@
 #include <WinSock2.h>
 #include <PacketBuffer.h>
 #include <string>
-#include <unordered_map>
+#include <vector>
+#include "LockFreeStack.h"
 #include "Session.h"
 
 class CLanServer
@@ -19,12 +20,6 @@ public:
 	 * @return (bool)성공 여부
 	 */
 	bool Start(const CHAR* ip, SHORT port, DWORD workerCount, DWORD activeCount, BOOL nagle, DWORD maxSessionCount);
-
-	/**
-	 * @brief 서버 종료
-	 * @param 없음
-	 * @return 없음
-	 */
 	void Stop();
 
 	/**
@@ -66,24 +61,29 @@ private:
 	void AcceptThreadMain();
 	void WorkerThreadMain();
 
-	Session* FindSession(DWORD64 sessionID);
-	void ReleaseSession(DWORD64 sessionID);
+	//Session* FindSession(DWORD64 sessionID);
+	Session* AcquireSession(DWORD64 sessionID);
+	void ReturnSession(Session* session);
+	void ReleaseSession(Session* session);
+
 	void RecvProc(Session* session, DWORD cbTransferred);
 	void SendProc(Session* session, DWORD cbTransferred);
-	
+
+	void SendPost(Session* session);
+
 private:
 	HANDLE m_hcp;
 	SOCKET m_listenSock;
 	bool m_isRunning;
 	std::vector<HANDLE> m_threads;
 
-	std::unordered_map<ULONGLONG, Session*> m_sessionMap;
-	SRWLOCK m_sessionMapLock;
+	Session* m_sessions;
+	LockFreeStack<DWORD> m_indexStack;
+	volatile LONG m_sessionCount;
 
 	DWORD64 m_sessionIDGenerator;
 
 	// 설정 옵션 보관
 	DWORD m_maxSessionCount;
 	BOOL m_nagle;
-
 };

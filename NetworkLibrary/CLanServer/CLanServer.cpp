@@ -2,15 +2,10 @@
 #include "CLanServer.h"
 #include "process.h"
 
-struct Header
-{
-	USHORT len;
-};
-
 CLanServer::CLanServer() :
-	m_hcp(NULL), m_listenSock(INVALID_SOCKET), m_isRunning(false), m_sessionIDGenerator(0), m_maxSessionCount(0), m_nagle(TRUE)
+	m_hcp(NULL), m_listenSock(INVALID_SOCKET), m_isRunning(false), m_sessions(nullptr), 
+	m_sessionCount(0), m_sessionIDGenerator(0), m_maxSessionCount(0), m_nagle(TRUE)
 {
-	InitializeSRWLock(&m_sessionMapLock);
 }
 
 CLanServer::~CLanServer()
@@ -21,6 +16,9 @@ CLanServer::~CLanServer()
 
 bool CLanServer::Start(const CHAR* ip, SHORT port, DWORD workerCount, DWORD activeCount, BOOL nagle, DWORD maxSessionCount)
 {
+	if (maxSessionCount == 0 || maxSessionCount > Session::INDEX_MASK + 1)
+		return false;
+
 	WSADATA wsa;
 	if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0)
 		return false;
@@ -49,6 +47,11 @@ bool CLanServer::Start(const CHAR* ip, SHORT port, DWORD workerCount, DWORD acti
 	// listen
 	if (listen(m_listenSock, SOMAXCONN) == SOCKET_ERROR)
 		return false;
+
+	// Session 배열 세팅
+	m_sessions = new Session[m_maxSessionCount];
+	for (int i = (int)m_maxSessionCount - 1; i >= 0; i--)
+		m_indexStack.Push((DWORD)i);
 
 	m_isRunning = true;
 
@@ -93,15 +96,27 @@ void CLanServer::Stop()
 	m_threads.clear();
 
 	// 남은 세션 정리
-	AcquireSRWLockExclusive(&m_sessionMapLock);
-	for (auto& pair : m_sessionMap)
+	if (m_sessions != nullptr)
 	{
-		Session* session = pair.second;
-		closesocket(session->sock);
-		delete session;
+		for (DWORD i = 0; i < m_maxSessionCount; i++)
+		{
+			Session* session = &m_sessions[i];
+			if (session->ioCount & Session::RELEASE_FLAG)
+				continue;
+
+			closesocket(session->sock);
+
+			for (int j = 0; j < session->sendingCount; j++)
+				Packet::Free(session->sendingPackets[j]);
+
+			Packet* packet;
+			while (session->sendQ.Dequeue(packet))
+				Packet::Free(packet);
+		}
+
+		delete[] m_sessions;
+		m_sessions = nullptr;
 	}
-	m_sessionMap.clear();
-	ReleaseSRWLockExclusive(&m_sessionMapLock);
 
 	if (m_hcp != NULL)
 	{
@@ -114,85 +129,34 @@ void CLanServer::Stop()
 
 int CLanServer::GetSessionCount()
 {
-	AcquireSRWLockShared(&m_sessionMapLock);
-	int ret = (int)m_sessionMap.size();
-	ReleaseSRWLockShared(&m_sessionMapLock);
-	return ret;
+	return m_sessionCount;
 }
 
 bool CLanServer::Disconnect(DWORD64 sessionID)
 {
-	AcquireSRWLockShared(&m_sessionMapLock);
-	Session* session = FindSession(sessionID);
-	ReleaseSRWLockShared(&m_sessionMapLock);
-
+	Session* session = AcquireSession(sessionID);
 	if (session == nullptr)
 		return false;
 
 	closesocket(session->sock);
+
+	ReturnSession(session);
 	return true;
 }
 
 bool CLanServer::SendPacket(DWORD64 sessionID, Packet* packet)
 {
-	int retval = 0;
-	AcquireSRWLockShared(&m_sessionMapLock);
-	Session* session = FindSession(sessionID);
-	ReleaseSRWLockShared(&m_sessionMapLock);
+	Session* session = AcquireSession(sessionID);
+	if (session == nullptr)
+		return false;
 
-	if (session == nullptr) return false;
+	packet->SetLanHeader();
+	packet->AddRef();
+	session->sendQ.Enqueue(packet);
 
-	EnterCriticalSection(&session->cs);
+	SendPost(session);
 
-	Header header;
-	header.len = packet->GetDataSize();
-	session->sendQ.Enqueue((char*)&header, sizeof(header));
-	session->sendQ.Enqueue(packet->GetReadPtr(), header.len);
-	packet->MoveReadPos(header.len);
-
-	if (InterlockedExchange(&session->isSending, TRUE) == FALSE)
-	{
-		WSABUF wsabuf[2];
-		int sendQUseSize = session->sendQ.GetUseSize();
-		int sendQDirectSize = session->sendQ.DirectDequeueSize();
-
-		wsabuf[0].buf = session->sendQ.GetFrontBufferPtr();
-		wsabuf[0].len = sendQDirectSize;
-		InterlockedIncrement(&session->ioCount);
-
-		ZeroMemory(&session->sendOverlapped.overlapped, sizeof(OVERLAPPED));
-		if (sendQUseSize == sendQDirectSize)
-		{
-			retval = WSASend(session->sock, wsabuf, 1, NULL, 0, (OVERLAPPED*)&session->sendOverlapped, NULL);
-		}
-		else if (sendQUseSize > sendQDirectSize)
-		{
-			wsabuf[1].buf = session->sendQ.GetBufferPtr();
-			wsabuf[1].len = sendQUseSize - sendQDirectSize;
-			retval = WSASend(session->sock, wsabuf, 2, NULL, 0, (OVERLAPPED*)&session->sendOverlapped, NULL);
-		}
-
-		if (retval == SOCKET_ERROR)
-		{
-			int errCode = WSAGetLastError();
-			if (errCode != WSA_IO_PENDING)
-			{
-				if (errCode != WSAECONNRESET)
-				{
-					__debugbreak();
-				}
-				if (InterlockedDecrement(&session->ioCount) == 0)
-				{
-					LeaveCriticalSection(&session->cs);
-					ReleaseSession(session->sessionID);
-					return false;
-				}
-			}
-		}
-	}
-
-	LeaveCriticalSection(&session->cs);
-
+	ReturnSession(session);
 	return true;
 }
 
@@ -239,16 +203,18 @@ void CLanServer::AcceptThreadMain()
 		char* ipStr = inet_ntoa(clientaddr.sin_addr);
 		SHORT port = ntohs(clientaddr.sin_port);
 
-		// IP 필터링
-		if (OnConnectionRequest(ipStr, port) == false)
+		// 빈 세션 index 획득. 없으면 최대 접속자 수 초과
+		DWORD index;
+		if (m_indexStack.Pop(&index) == false)
 		{
 			closesocket(client_sock);
 			continue;
 		}
 
-		// 최대 접속자 수 확인
-		if (GetSessionCount() >= (int)m_maxSessionCount)
+		// IP 필터링
+		if (OnConnectionRequest(ipStr, port) == false)
 		{
+			m_indexStack.Push(index);
 			closesocket(client_sock);
 			continue;
 		}
@@ -270,32 +236,40 @@ void CLanServer::AcceptThreadMain()
 			setsockopt(client_sock, IPPROTO_TCP, TCP_NODELAY, (const char*)&optval, sizeof(optval));
 		}
 
-		Session* ptr = new Session(client_sock, m_sessionIDGenerator++, ipStr, port);
+		Session* session = &m_sessions[index];
+		DWORD64 sessionID = (++m_sessionIDGenerator << Session::INDEX_BITS) | index;
+		session->Init(client_sock, sessionID, ipStr, port);
 
-		AcquireSRWLockExclusive(&m_sessionMapLock);
-		m_sessionMap[ptr->sessionID] = ptr;
-		ReleaseSRWLockExclusive(&m_sessionMapLock);
+		InterlockedIncrement(&session->ioCount);
+		InterlockedAnd(&session->ioCount, ~Session::RELEASE_FLAG);
+		InterlockedIncrement(&m_sessionCount);
 
-		CreateIoCompletionPort((HANDLE)client_sock, m_hcp, ptr->sessionID, 0);
+		CreateIoCompletionPort((HANDLE)client_sock, m_hcp, sessionID, 0);
 
-		OnAccept(ptr->sessionID);
+		OnAccept(sessionID);
 
 		// 첫 WSARecv
-		InterlockedIncrement(&ptr->ioCount);
+		InterlockedIncrement(&session->ioCount);
 		flags = 0;
-		wsabuf.buf = ptr->recvQ.GetRearBufferPtr();
-		wsabuf.len = ptr->recvQ.DirectEnqueueSize();
+		wsabuf.buf = session->recvQ.GetRearBufferPtr();
+		wsabuf.len = session->recvQ.DirectEnqueueSize();
 
-		int retval = WSARecv(client_sock, &wsabuf, 1, NULL, &flags, (OVERLAPPED*)&ptr->recvOverlapped, NULL);
+		ZeroMemory(&session->recvOverlapped.overlapped, sizeof(OVERLAPPED));
+		int retval = WSARecv(client_sock, &wsabuf, 1, NULL, &flags, (OVERLAPPED*)&session->recvOverlapped, NULL);
 		if (retval == SOCKET_ERROR)
 		{
-			if (WSAGetLastError() != ERROR_IO_PENDING)
+			int errCode = WSAGetLastError();
+			if (errCode != ERROR_IO_PENDING)
 			{
-				if (InterlockedDecrement(&ptr->ioCount) == 0)
-					ReleaseSession(ptr->sessionID);
-				__debugbreak();
+				if (errCode != WSAECONNRESET)
+				{
+					__debugbreak();
+				}
+				InterlockedDecrement(&session->ioCount);
 			}
 		}
+
+		ReturnSession(session);
 	}
 }
 
@@ -308,7 +282,6 @@ unsigned int __stdcall CLanServer::WorkerThread(LPVOID arg)
 
 void CLanServer::WorkerThreadMain()
 {
-
 	int retval;
 
 	while (1)
@@ -346,11 +319,9 @@ void CLanServer::WorkerThreadMain()
 		if (retval == FALSE || cbTransferred == 0)
 		{
 			if (InterlockedDecrement(&session->ioCount) == 0)
-				ReleaseSession(session->sessionID);
+				ReleaseSession(session);
 			continue;
 		}
-
-		EnterCriticalSection(&session->cs);
 
 		if (overlapped->type == IOType::RECV)
 		{
@@ -360,37 +331,54 @@ void CLanServer::WorkerThreadMain()
 		{
 			SendProc(session, cbTransferred);
 		}
-
-		LeaveCriticalSection(&session->cs);
 	}
 }
 
-Session* CLanServer::FindSession(DWORD64 sessionID)
+Session* CLanServer::AcquireSession(DWORD64 sessionID)
 {
-	auto iter = m_sessionMap.find(sessionID);
-	if (iter == m_sessionMap.end())
+	DWORD index = (DWORD)(sessionID & Session::INDEX_MASK);
+	if (index >= m_maxSessionCount)
 		return nullptr;
-	return iter->second;
-}
 
-void CLanServer::ReleaseSession(DWORD64 sessionID)
-{
-	AcquireSRWLockExclusive(&m_sessionMapLock);
-	Session* session = FindSession(sessionID);
-	if (session == nullptr)
+	Session* session = &m_sessions[index];
+
+	LONG ioCount = InterlockedIncrement(&session->ioCount);
+
+	if ((ioCount & Session::RELEASE_FLAG) != 0 || session->sessionID != sessionID)
 	{
-		ReleaseSRWLockExclusive(&m_sessionMapLock);
-		return;
+		ReturnSession(session);
+		return nullptr;
 	}
 
-	m_sessionMap.erase(sessionID);
-	ReleaseSRWLockExclusive(&m_sessionMapLock);
+	return session;
+}
+
+void CLanServer::ReturnSession(Session* session)
+{
+	if (InterlockedDecrement(&session->ioCount) == 0)
+		ReleaseSession(session);
+}
+
+void CLanServer::ReleaseSession(Session* session)
+{
+	if (InterlockedCompareExchange(&session->ioCount, Session::RELEASE_FLAG, 0) != 0)
+		return;
+
+	closesocket(session->sock);
+
+	for (int i = 0; i < session->sendingCount; i++)
+		Packet::Free(session->sendingPackets[i]);
+	session->sendingCount = 0;
+
+	Packet* packet;
+	while (session->sendQ.Dequeue(packet))
+		Packet::Free(packet);
+
+	InterlockedDecrement(&m_sessionCount);
 
 	OnRelease(session->sessionID);
 
-	closesocket(session->sock);
-	delete session;
-	session = nullptr;
+	m_indexStack.Push((DWORD)(session - m_sessions));
 }
 
 void CLanServer::RecvProc(Session* session, DWORD cbTransferred)
@@ -400,20 +388,21 @@ void CLanServer::RecvProc(Session* session, DWORD cbTransferred)
 	while (true)
 	{
 		int useSize = session->recvQ.GetUseSize();
-		if (useSize < sizeof(Header))
+		if (useSize < sizeof(LanServerHeader))
 			break;
 
-		Header header;
-		session->recvQ.Peek((char*)&header, sizeof(Header));
-		if (useSize < sizeof(Header) + header.len)
+		LanServerHeader header;
+		session->recvQ.Peek((char*)&header, sizeof(header));
+		if (useSize < sizeof(header) + header._len)
 			break;
-		session->recvQ.MoveFront(sizeof(Header));
+		session->recvQ.MoveFront(sizeof(header));
 
-		Packet recvPacket;
-		session->recvQ.Dequeue(recvPacket.GetWritePtr(), header.len);
-		recvPacket.MoveWritePos(header.len);
+		Packet* recvPacket = Packet::Alloc();
+		session->recvQ.Dequeue(recvPacket->GetWritePtr(), header._len);
+		recvPacket->MoveWritePos(header._len);
 
-		OnRecv(session->sessionID, &recvPacket);
+		OnRecv(session->sessionID, recvPacket);
+		Packet::Free(recvPacket);
 	}
 
 	// WSARecv 재등록
@@ -449,7 +438,7 @@ void CLanServer::RecvProc(Session* session, DWORD cbTransferred)
 			}
 			if (InterlockedDecrement(&session->ioCount) == 0)
 			{
-				ReleaseSession(session->sessionID);
+				ReleaseSession(session);
 				return;
 			}
 		}
@@ -458,56 +447,60 @@ void CLanServer::RecvProc(Session* session, DWORD cbTransferred)
 
 void CLanServer::SendProc(Session* session, DWORD cbTransferred)
 {
-	session->sendQ.MoveFront(cbTransferred);
-	session->isSending = FALSE;
+	for (int i = 0; i < session->sendingCount; i++)
+		Packet::Free(session->sendingPackets[i]);
+	session->sendingCount = 0;
 
-	if (session->sendQ.GetUseSize() > 0)
-	{
-		if (InterlockedExchange(&session->isSending, TRUE) == FALSE)
-		{
-			WSABUF wsabuf[2];
-			int sendQUseSize = session->sendQ.GetUseSize();
-			int sendQDirectSize = session->sendQ.DirectDequeueSize();
-
-			wsabuf[0].buf = session->sendQ.GetFrontBufferPtr();
-			wsabuf[0].len = sendQDirectSize;
-			InterlockedIncrement(&session->ioCount);
-
-			int retval = 0;
-			ZeroMemory(&session->sendOverlapped.overlapped, sizeof(OVERLAPPED));
-			if (sendQUseSize == sendQDirectSize)
-			{
-				retval = WSASend(session->sock, wsabuf, 1, NULL, 0, (OVERLAPPED*)&session->sendOverlapped, NULL);
-			}
-			else if (sendQUseSize > sendQDirectSize)
-			{
-				wsabuf[1].buf = session->sendQ.GetBufferPtr();
-				wsabuf[1].len = sendQUseSize - sendQDirectSize;
-				retval = WSASend(session->sock, wsabuf, 2, NULL, 0, (OVERLAPPED*)&session->sendOverlapped, NULL);
-			}
-
-			if (retval == SOCKET_ERROR)
-			{
-				int errCode = WSAGetLastError();
-				if (errCode != WSA_IO_PENDING)
-				{
-					if (errCode != WSAECONNRESET)
-					{
-						__debugbreak();
-					}
-					if (InterlockedDecrement(&session->ioCount) == 0)
-					{
-						ReleaseSession(session->sessionID);
-						return;
-					}
-				}
-			}
-		}
-	}
+	InterlockedExchange(&session->isSending, FALSE);
+	
+	SendPost(session);
 
 	if (InterlockedDecrement(&session->ioCount) == 0)
+		ReleaseSession(session);
+}
+
+void CLanServer::SendPost(Session* session)
+{
+	while (true)
 	{
-		ReleaseSession(session->sessionID);
-		return;
+		if (InterlockedExchange(&session->isSending, TRUE) == TRUE)
+			return;
+
+		if (session->sendQ.GetSize() > 0)
+			break;
+
+		InterlockedExchange(&session->isSending, FALSE);
+		if (session->sendQ.GetSize() == 0)
+			return;
+	}
+
+	WSABUF wsabuf[Session::MAX_SEND_PACKET];
+	int count = 0;
+	Packet* packet;
+	while (count < Session::MAX_SEND_PACKET
+		&& session->sendQ.Dequeue(packet))
+	{
+		session->sendingPackets[count] = packet;
+		wsabuf[count].buf = packet->GetSendPtr();
+		wsabuf[count].len = (ULONG)packet->GetSendSize();
+		count++;
+	}
+	session->sendingCount = count;
+
+	InterlockedIncrement(&session->ioCount);
+	ZeroMemory(&session->sendOverlapped.overlapped, sizeof(OVERLAPPED));
+	int retval = WSASend(session->sock, wsabuf, count, NULL, 0, (OVERLAPPED*)&session->sendOverlapped, NULL);
+	if (retval == SOCKET_ERROR)
+	{
+		int errCode = WSAGetLastError();
+		if (errCode != WSA_IO_PENDING)
+		{
+			if (errCode != WSAECONNRESET)
+			{
+				__debugbreak();
+			}
+			if (InterlockedDecrement(&session->ioCount) == 0)
+				ReleaseSession(session);
+		}
 	}
 }
