@@ -1,7 +1,9 @@
-#pragma once
+﻿#pragma once
 
 #include <Winsock2.h>
-#include <RingBuffer.h>
+#include "RingBuffer.h"
+#include "PacketBuffer.h"
+#include "LockFreeQueue.h"
 
 enum class IOType
 {
@@ -22,10 +24,15 @@ struct MyOverlapped
 
 struct Session
 {
+	enum { MAX_SEND_PACKET = 100 };		// WSASend 1회에 묶는 최대 Packet 수
+
 	SOCKET sock;
 	DWORD64 sessionID;
 	RingBuffer recvQ;
-	RingBuffer sendQ;
+	LockFreeQueue<Packet*> sendQ;
+	Packet* sendingPackets[MAX_SEND_PACKET];	// 송신 중인 패킷들. 정상 완료 시 전부 Free
+	int sendingCount;
+
 	MyOverlapped recvOverlapped;
 	MyOverlapped sendOverlapped;
 	char ip[16];
@@ -38,7 +45,7 @@ struct Session
 		sock(s),
 		sessionID(id),
 		recvQ(bufSize + 1),
-		sendQ(bufSize + 1),
+		sendingCount(0),
 		recvOverlapped(IOType::RECV),
 		sendOverlapped(IOType::SEND),
 		port(port),
