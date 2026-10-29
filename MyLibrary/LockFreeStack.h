@@ -1,38 +1,10 @@
 #pragma once
 #include <Windows.h>
+#include "LockFreeMemoryPoolTLS.h"
 
-enum Action
-{
-	PUSH_STR,
-	PUSH_TRY,
-	PUSH_SUC,
-	POP_STR,
-	POP_TRY,
-	POP_SUC,
-};
-
-struct Log
-{
-	Action type;
-	int threadID;
-	DWORD64 nodeAddr;
-	DWORD64 nextAddr;
-	DWORD64 data;
-};
-
-static Log logArr[10000];
-static DWORD64 logIdx = 0;
-static void write(Action type, DWORD64 ptr1, DWORD64 ptr2, DWORD data = 0)
-{
-	unsigned int idx = InterlockedIncrement(&logIdx) % 10000;
-	Log log;
-	log.type = type;
-	log.threadID = GetCurrentThreadId();
-	log.nodeAddr = ptr1;
-	log.nextAddr = ptr2;
-	log.data = data;
-	logArr[idx] = log;
-}
+/*
+* LockFreeStack
+*/
 
 template<typename T>
 class LockFreeStack
@@ -71,14 +43,17 @@ public:
 		while (current)
 		{
 			Node* next = current->_Next;
-			delete current;
+			s_nodePool.Free(current);
 			current = next;
 		}
 	}
 
+	LockFreeStack(const LockFreeStack&) = delete;
+	LockFreeStack& operator=(const LockFreeStack&) = delete;
+
 	void Push(T data)
 	{
-		Node* newNode = new Node();	// 추후 메모리풀로 변경
+		Node* newNode = s_nodePool.Alloc();
 		newNode->_Data = data;
 
 		Node* currentTopPtr = nullptr;
@@ -94,9 +69,7 @@ public:
 			
 			nextTag = GetTag(currentTopTagged) + 1;
 			newTopTagged = MakeTagged(nextTag, newNode);
-			write(PUSH_TRY, newTopTagged, currentTopTagged);
 		} while (InterlockedCompareExchange(&_Top, newTopTagged, currentTopTagged) != currentTopTagged);
-		write(PUSH_SUC, newTopTagged, currentTopTagged);
 	}
 
 	bool Pop(T* ret)
@@ -107,7 +80,6 @@ public:
 		Node* nextTopPtr = nullptr;
 		DWORD64 nextTopTag = 0;
 
-		write(POP_STR, 0, 0);
 		do
 		{
 			oldTopTagged = _Top;
@@ -118,14 +90,17 @@ public:
 			nextTopPtr = oldTopPtr->_Next;
 			nextTopTag = GetTag(oldTopTagged) + 1;
 			nextTopTagged = MakeTagged(nextTopTag, nextTopPtr);
-			write(POP_TRY, oldTopTagged, nextTopTagged);
 		} while (InterlockedCompareExchange(&_Top, nextTopTagged, oldTopTagged) != oldTopTagged);
-		write(POP_SUC, oldTopTagged, nextTopTagged, oldTopPtr->_Data);
+
 		(*ret) = oldTopPtr->_Data;
-		delete oldTopPtr;
+		s_nodePool.Free(oldTopPtr);
 		return true;
 	}
 
 private:
 	volatile DWORD64 _Top;
+	static jeongu::LockFreeMemoryPoolTLS<Node> s_nodePool;
 };
+
+template<typename T>
+jeongu::LockFreeMemoryPoolTLS<typename LockFreeStack<T>::Node> LockFreeStack<T>::s_nodePool(false, 0, 0);
