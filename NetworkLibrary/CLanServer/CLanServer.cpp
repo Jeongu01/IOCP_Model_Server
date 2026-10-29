@@ -426,6 +426,7 @@ void CLanServer::RecvProc(Session* session, DWORD cbTransferred)
 	wsabuf[0].len = recvQDirectSize;
 
 	int retval = 0;
+	ZeroMemory(&session->recvOverlapped.overlapped, sizeof(OVERLAPPED));
 	if (recvQFreeSize == recvQDirectSize)
 	{
 		retval = WSARecv(session->sock, wsabuf, 1, NULL, &flags, (OVERLAPPED*)&session->recvOverlapped, NULL);
