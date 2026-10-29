@@ -40,7 +40,7 @@ public:
         _size = 0;
 
         Node* dummy = s_nodePool.Alloc();
-        dummy->next = 0;
+        dummy->next = MakeTagged(GetTag(dummy->next) + 1, nullptr);
 
         _head = MakeTagged(0, dummy);
         _tail = _head;
@@ -64,7 +64,7 @@ public:
     {
         Node* node = s_nodePool.Alloc();
         node->data = t;
-        node->next = 0;
+        node->next = MakeTagged(GetTag(node->next) + 1, nullptr);
 
         while (true)
         {
@@ -73,6 +73,9 @@ public:
 
             DWORD64 nextTagged = tail->next;
             Node* next = GetPointer(nextTagged);
+
+            if (tailTagged != _tail)
+                continue;
 
             if (next == nullptr)
             {
