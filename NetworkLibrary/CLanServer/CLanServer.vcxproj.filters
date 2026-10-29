@@ -33,6 +33,18 @@
     <ClInclude Include="EchoServer.h">
       <Filter>소스 파일</Filter>
     </ClInclude>
+    <ClInclude Include="..\..\MyLibrary\LockFreeMemoryPool.h">
+      <Filter>소스 파일</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\MyLibrary\LockFreeMemoryPoolTLS.h">
+      <Filter>소스 파일</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\MyLibrary\LockFreeQueue.h">
+      <Filter>소스 파일</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\MyLibrary\LockFreeStack.h">
+      <Filter>소스 파일</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="CLanServer.cpp">
