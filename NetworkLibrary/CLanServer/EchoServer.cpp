@@ -23,9 +23,10 @@ void EchoServer::OnRecv(DWORD64 sessionID, Packet* packet)
 
 	printf("[SessionID:%lld] %lld\n", sessionID, data);
 
-	Packet sendPacket = Packet();
-	sendPacket << data;
-	SendPacket(sessionID, &sendPacket);
+	Packet *sendPacket = Packet::Alloc();
+	(*sendPacket) << data;
+	SendPacket(sessionID, sendPacket);
+	Packet::Free(sendPacket);
 }
 
 void EchoServer::OnError(int errorCode, std::wstring errorMsg)
