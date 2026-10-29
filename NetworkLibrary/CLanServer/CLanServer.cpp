@@ -1,4 +1,4 @@
-#define _WINSOCK_DEPRECATED_NO_WARNINGS
+ï»¿#define _WINSOCK_DEPRECATED_NO_WARNINGS
 #include "CLanServer.h"
 #include "process.h"
 
@@ -28,11 +28,11 @@ bool CLanServer::Start(const CHAR* ip, SHORT port, DWORD workerCount, DWORD acti
 	m_maxSessionCount = maxSessionCount;
 	m_nagle = nagle;
 
-	// IOCP »ı¼º
+	// IOCP ìƒì„±
 	m_hcp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, activeCount);
 	if (m_hcp == NULL) return false;
 
-	// ¸®½¼ ¼ÒÄÏ »ı¼º
+	// ë¦¬ìŠ¨ ì†Œì¼“ ìƒì„±
 	m_listenSock = socket(AF_INET, SOCK_STREAM, 0);
 	if (m_listenSock == INVALID_SOCKET) return false;
 
@@ -52,12 +52,12 @@ bool CLanServer::Start(const CHAR* ip, SHORT port, DWORD workerCount, DWORD acti
 
 	m_isRunning = true;
 
-	// Accept ½º·¹µå »ı¼º
+	// Accept ìŠ¤ë ˆë“œ ìƒì„±
 	HANDLE hAcceptThread = (HANDLE)_beginthreadex(NULL, 0, AcceptThread, this, 0, NULL);
 	if (hAcceptThread == NULL) return false;
 	m_threads.push_back(hAcceptThread);
 	
-	// ¿öÄ¿ ½º·¹µå »ı¼º
+	// ì›Œì»¤ ìŠ¤ë ˆë“œ ìƒì„±
 	for (unsigned int i = 0; i < workerCount; i++)
 	{
 		HANDLE hWorkerThread = (HANDLE)_beginthreadex(NULL, 0, WorkerThread, this, 0, NULL);
@@ -72,14 +72,14 @@ void CLanServer::Stop()
 {
 	m_isRunning = false;
 
-	// ¸®½¼ ¼ÒÄÏ ´İ±â
+	// ë¦¬ìŠ¨ ì†Œì¼“ ë‹«ê¸°
 	if (m_listenSock != INVALID_SOCKET)
 	{
 		closesocket(m_listenSock);
 		m_listenSock = INVALID_SOCKET;
 	}
 
-	// ¿öÄ¿ ½º·¹µå Á¾·á
+	// ì›Œì»¤ ìŠ¤ë ˆë“œ ì¢…ë£Œ
 	for (int i = 0; i < m_threads.size(); i++)
 	{
 		PostQueuedCompletionStatus(m_hcp, 0, 0, 0);
@@ -92,7 +92,7 @@ void CLanServer::Stop()
 	}
 	m_threads.clear();
 
-	// ³²Àº ¼¼¼Ç Á¤¸®
+	// ë‚¨ì€ ì„¸ì…˜ ì •ë¦¬
 	AcquireSRWLockExclusive(&m_sessionMapLock);
 	for (auto& pair : m_sessionMap)
 	{
@@ -136,9 +136,9 @@ bool CLanServer::Disconnect(DWORD64 sessionID)
 bool CLanServer::SendPacket(DWORD64 sessionID, Packet* packet)
 {
 	int retval = 0;
-	AcquireSRWLockExclusive(&m_sessionMapLock);
+	AcquireSRWLockShared(&m_sessionMapLock);
 	Session* session = FindSession(sessionID);
-	ReleaseSRWLockExclusive(&m_sessionMapLock);
+	ReleaseSRWLockShared(&m_sessionMapLock);
 
 	if (session == nullptr) return false;
 
@@ -152,7 +152,6 @@ bool CLanServer::SendPacket(DWORD64 sessionID, Packet* packet)
 
 	if (InterlockedExchange(&session->isSending, TRUE) == FALSE)
 	{
-		DWORD sendbytes;
 		WSABUF wsabuf[2];
 		int sendQUseSize = session->sendQ.GetUseSize();
 		int sendQDirectSize = session->sendQ.DirectDequeueSize();
@@ -161,15 +160,16 @@ bool CLanServer::SendPacket(DWORD64 sessionID, Packet* packet)
 		wsabuf[0].len = sendQDirectSize;
 		InterlockedIncrement(&session->ioCount);
 
+		ZeroMemory(&session->sendOverlapped.overlapped, sizeof(OVERLAPPED));
 		if (sendQUseSize == sendQDirectSize)
 		{
-			retval = WSASend(session->sock, wsabuf, 1, &sendbytes, 0, (OVERLAPPED*)&session->sendOverlapped, NULL);
+			retval = WSASend(session->sock, wsabuf, 1, NULL, 0, (OVERLAPPED*)&session->sendOverlapped, NULL);
 		}
 		else if (sendQUseSize > sendQDirectSize)
 		{
 			wsabuf[1].buf = session->sendQ.GetBufferPtr();
 			wsabuf[1].len = sendQUseSize - sendQDirectSize;
-			retval = WSASend(session->sock, wsabuf, 2, &sendbytes, 0, (OVERLAPPED*)&session->sendOverlapped, NULL);
+			retval = WSASend(session->sock, wsabuf, 2, NULL, 0, (OVERLAPPED*)&session->sendOverlapped, NULL);
 		}
 
 		if (retval == SOCKET_ERROR)
@@ -224,7 +224,7 @@ void CLanServer::AcceptThreadMain()
 	SOCKADDR_IN clientaddr;
 	int addrlen;
 	WSABUF wsabuf;
-	DWORD recvbytes, flags;
+	DWORD flags;
 
 	while (m_isRunning)
 	{
@@ -235,35 +235,35 @@ void CLanServer::AcceptThreadMain()
 			break;
 		}
 
-		// IP ¹× Æ÷Æ® È¹µæ
+		// IP ë° í¬íŠ¸ íšë“
 		char* ipStr = inet_ntoa(clientaddr.sin_addr);
 		SHORT port = ntohs(clientaddr.sin_port);
 
-		// IP ÇÊÅÍ¸µ
+		// IP í•„í„°ë§
 		if (OnConnectionRequest(ipStr, port) == false)
 		{
 			closesocket(client_sock);
 			continue;
 		}
 
-		// ÃÖ´ë Á¢¼ÓÀÚ ¼ö È®ÀÎ
+		// ìµœëŒ€ ì ‘ì†ì ìˆ˜ í™•ì¸
 		if (GetSessionCount() >= (int)m_maxSessionCount)
 		{
 			closesocket(client_sock);
 			continue;
 		}
 
-		// ¸µ°Å ¼³Á¤
+		// ë§ê±° ì„¤ì •
 		LINGER linger;
 		linger.l_onoff = 1;
 		linger.l_linger = 0;
 		setsockopt(client_sock, SOL_SOCKET, SO_LINGER, (const char*)&linger, sizeof(linger));
 
-		// ºñµ¿±â send¸¦ À§ÇÑ ¼Û½Å ¹öÆÛ Å©±â 0À¸·Î º¯°æ
+		// ë¹„ë™ê¸° sendë¥¼ ìœ„í•œ ì†¡ì‹  ë²„í¼ í¬ê¸° 0ìœ¼ë¡œ ë³€ê²½
 		int sendBufSize = 0;
 		setsockopt(client_sock, SOL_SOCKET, SO_SNDBUF, (const char*)&sendBufSize, sizeof(sendBufSize));
 		
-		// Nagle ¼³Á¤
+		// Nagle ì„¤ì •
 		if (m_nagle == FALSE)
 		{
 			int optval = 1;
@@ -272,21 +272,21 @@ void CLanServer::AcceptThreadMain()
 
 		Session* ptr = new Session(client_sock, m_sessionIDGenerator++, ipStr, port);
 
-		AcquireSRWLockShared(&m_sessionMapLock);
+		AcquireSRWLockExclusive(&m_sessionMapLock);
 		m_sessionMap[ptr->sessionID] = ptr;
-		ReleaseSRWLockShared(&m_sessionMapLock);
+		ReleaseSRWLockExclusive(&m_sessionMapLock);
 
 		CreateIoCompletionPort((HANDLE)client_sock, m_hcp, ptr->sessionID, 0);
 
 		OnAccept(ptr->sessionID);
 
-		// Ã¹ WSARecv
+		// ì²« WSARecv
 		InterlockedIncrement(&ptr->ioCount);
 		flags = 0;
 		wsabuf.buf = ptr->recvQ.GetRearBufferPtr();
 		wsabuf.len = ptr->recvQ.DirectEnqueueSize();
 
-		int retval = WSARecv(client_sock, &wsabuf, 1, &recvbytes, &flags, (OVERLAPPED*)&ptr->recvOverlapped, NULL);
+		int retval = WSARecv(client_sock, &wsabuf, 1, NULL, &flags, (OVERLAPPED*)&ptr->recvOverlapped, NULL);
 		if (retval == SOCKET_ERROR)
 		{
 			if (WSAGetLastError() != ERROR_IO_PENDING)
@@ -318,13 +318,13 @@ void CLanServer::WorkerThreadMain()
 		MyOverlapped* overlapped;
 		retval = GetQueuedCompletionStatus(m_hcp, &cbTransferred, (PULONG_PTR)&sessionID, (LPOVERLAPPED*)&overlapped, INFINITE);
 
-		// Á¾·á Ã³¸®
+		// ì¢…ë£Œ ì²˜ë¦¬
 		if (cbTransferred == 0 && sessionID == 0 && overlapped == 0)
 		{
 			break;
 		}
 
-		// ½Ã°£ ÃÊ°ú
+		// ì‹œê°„ ì´ˆê³¼
 		if (overlapped == NULL)
 		{
 			__debugbreak();
@@ -342,7 +342,7 @@ void CLanServer::WorkerThreadMain()
 			break;
 		}
 
-		// ¿¡·¯ ¹× ²÷±è Ã³¸®
+		// ì—ëŸ¬ ë° ëŠê¹€ ì²˜ë¦¬
 		if (retval == FALSE || cbTransferred == 0)
 		{
 			if (InterlockedDecrement(&session->ioCount) == 0)
@@ -416,9 +416,8 @@ void CLanServer::RecvProc(Session* session, DWORD cbTransferred)
 		OnRecv(session->sessionID, &recvPacket);
 	}
 
-	// WSARecv Àçµî·Ï
+	// WSARecv ì¬ë“±ë¡
 	WSABUF wsabuf[2];
-	DWORD recvbytes;
 	DWORD flags = 0;
 	int recvQFreeSize = session->recvQ.GetFreeSize();
 	int recvQDirectSize = session->recvQ.DirectEnqueueSize();
@@ -429,13 +428,13 @@ void CLanServer::RecvProc(Session* session, DWORD cbTransferred)
 	int retval = 0;
 	if (recvQFreeSize == recvQDirectSize)
 	{
-		retval = WSARecv(session->sock, wsabuf, 1, &recvbytes, &flags, (OVERLAPPED*)&session->recvOverlapped, NULL);
+		retval = WSARecv(session->sock, wsabuf, 1, NULL, &flags, (OVERLAPPED*)&session->recvOverlapped, NULL);
 	}
 	else if (recvQFreeSize > recvQDirectSize)
 	{
 		wsabuf[1].buf = session->recvQ.GetBufferPtr();
 		wsabuf[1].len = recvQFreeSize - recvQDirectSize;
-		retval = WSARecv(session->sock, wsabuf, 2, &recvbytes, &flags, (OVERLAPPED*)&session->recvOverlapped, NULL);
+		retval = WSARecv(session->sock, wsabuf, 2, NULL, &flags, (OVERLAPPED*)&session->recvOverlapped, NULL);
 	}
 
 	if (retval == SOCKET_ERROR)
@@ -465,7 +464,6 @@ void CLanServer::SendProc(Session* session, DWORD cbTransferred)
 	{
 		if (InterlockedExchange(&session->isSending, TRUE) == FALSE)
 		{
-			DWORD sendbytes;
 			WSABUF wsabuf[2];
 			int sendQUseSize = session->sendQ.GetUseSize();
 			int sendQDirectSize = session->sendQ.DirectDequeueSize();
@@ -475,15 +473,16 @@ void CLanServer::SendProc(Session* session, DWORD cbTransferred)
 			InterlockedIncrement(&session->ioCount);
 
 			int retval = 0;
+			ZeroMemory(&session->sendOverlapped.overlapped, sizeof(OVERLAPPED));
 			if (sendQUseSize == sendQDirectSize)
 			{
-				retval = WSASend(session->sock, wsabuf, 1, &sendbytes, 0, (OVERLAPPED*)&session->sendOverlapped, NULL);
+				retval = WSASend(session->sock, wsabuf, 1, NULL, 0, (OVERLAPPED*)&session->sendOverlapped, NULL);
 			}
 			else if (sendQUseSize > sendQDirectSize)
 			{
 				wsabuf[1].buf = session->sendQ.GetBufferPtr();
 				wsabuf[1].len = sendQUseSize - sendQDirectSize;
-				retval = WSASend(session->sock, wsabuf, 2, &sendbytes, 0, (OVERLAPPED*)&session->sendOverlapped, NULL);
+				retval = WSASend(session->sock, wsabuf, 2, NULL, 0, (OVERLAPPED*)&session->sendOverlapped, NULL);
 			}
 
 			if (retval == SOCKET_ERROR)
