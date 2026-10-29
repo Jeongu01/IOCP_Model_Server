@@ -1,4 +1,4 @@
-#pragma once
+ï»¿#pragma once
 
 #pragma comment(lib, "ws2_32")
 #include <WinSock2.h>
@@ -14,44 +14,44 @@ public:
 	virtual ~CLanServer();
 
 	/**
-	 * @brief ¼­¹ö ½ÃÀÛ
-	 * @param (ip)¿ÀÇÂIP (port)Æ÷Æ® (worketCount)¿öÄ¿½º·¹µå »ı¼º¼ö (activeCount)¿öÄ¿½º·¹µå ·¯´×¼ö (nagle)³ª±Û¿É¼Ç (maxSessionCount)ÃÖ´ëÁ¢¼ÓÀÚ ¼ö
-	 * @return (bool)¼º°ø ¿©ºÎ
+	 * @brief ì„œë²„ ì‹œì‘
+	 * @param (ip)ì˜¤í”ˆIP (port)í¬íŠ¸ (worketCount)ì›Œì»¤ìŠ¤ë ˆë“œ ìƒì„±ìˆ˜ (activeCount)ì›Œì»¤ìŠ¤ë ˆë“œ ëŸ¬ë‹ìˆ˜ (nagle)ë‚˜ê¸€ì˜µì…˜ (maxSessionCount)ìµœëŒ€ì ‘ì†ì ìˆ˜
+	 * @return (bool)ì„±ê³µ ì—¬ë¶€
 	 */
 	bool Start(const CHAR* ip, SHORT port, DWORD workerCount, DWORD activeCount, BOOL nagle, DWORD maxSessionCount);
 
 	/**
-	 * @brief ¼­¹ö Á¾·á
-	 * @param ¾øÀ½
-	 * @return ¾øÀ½
+	 * @brief ì„œë²„ ì¢…ë£Œ
+	 * @param ì—†ìŒ
+	 * @return ì—†ìŒ
 	 */
 	void Stop();
 
 	/**
-	 * @brief ÇöÀç ¼¼¼Ç ¼ö ¾ò±â
-	 * @param ¾øÀ½
-	 * @return (int)ÇöÀç ¼¼¼Ç ¼ö
+	 * @brief í˜„ì¬ ì„¸ì…˜ ìˆ˜ ì–»ê¸°
+	 * @param ì—†ìŒ
+	 * @return (int)í˜„ì¬ ì„¸ì…˜ ìˆ˜
 	 */
 	int GetSessionCount();
 
 	/**
-	 * @brief ¼¼¼Ç ¿¬°á ²÷±â
-	 * @param (sessionID)´ë»ó ¼¼¼ÇID
-	 * @return (bool)¼º°ø ¿©ºÎ
+	 * @brief ì„¸ì…˜ ì—°ê²° ëŠê¸°
+	 * @param (sessionID)ëŒ€ìƒ ì„¸ì…˜ID
+	 * @return (bool)ì„±ê³µ ì—¬ë¶€
 	 */
 	bool Disconnect(DWORD64 sessionID);
 
 	/**
-	 * @brief ÆĞÅ¶ Àü¼Û
-	 * @param (sessionID)´ë»ó ¼¼¼ÇID (packet)Àü¼ÛÇÒ ÆĞÅ¶
-	 * @return (bool)¼º°ø ¿©ºÎ
+	 * @brief íŒ¨í‚· ì „ì†¡
+	 * @param (sessionID)ëŒ€ìƒ ì„¸ì…˜ID (packet)ì „ì†¡í•  íŒ¨í‚·
+	 * @return (bool)ì„±ê³µ ì—¬ë¶€
 	 */
 	bool SendPacket(DWORD64 sessionID, Packet* packet);
 
-	virtual bool OnConnectionRequest(char* ip, SHORT port) = 0; // accept Á÷ÈÄ È£Ãâ
-	virtual void OnAccept(DWORD64 sessionID) = 0; // (Client Á¤º¸ / SessionID / ±âÅ¸µîµî) = 0; // Accept ÈÄ Á¢¼ÓÃ³¸® ¿Ï·á ÈÄ È£Ãâ
-	virtual void OnRelease(DWORD64 sessionID) = 0; // Release ÈÄ È£Ãâ
-	virtual void OnRecv(DWORD64 sessionID, Packet* packet) = 0; // ÆĞÅ¶ ¼ö½Å ¿Ï·á ÈÄ È£Ãâ
+	virtual bool OnConnectionRequest(char* ip, SHORT port) = 0; // accept ì§í›„ í˜¸ì¶œ
+	virtual void OnAccept(DWORD64 sessionID) = 0; // (Client ì •ë³´ / SessionID / ê¸°íƒ€ë“±ë“±) = 0; // Accept í›„ ì ‘ì†ì²˜ë¦¬ ì™„ë£Œ í›„ í˜¸ì¶œ
+	virtual void OnRelease(DWORD64 sessionID) = 0; // Release í›„ í˜¸ì¶œ
+	virtual void OnRecv(DWORD64 sessionID, Packet* packet) = 0; // íŒ¨í‚· ìˆ˜ì‹  ì™„ë£Œ í›„ í˜¸ì¶œ
 	virtual void OnError(int errorCode, std::wstring errorMsg) = 0;
 
 	int getAcceptTPS();
@@ -59,7 +59,7 @@ public:
 	int getSendMessageTPS();
 
 private:
-	// ½º·¹µå ÁøÀÔÁ¡
+	// ìŠ¤ë ˆë“œ ì§„ì…ì 
 	static unsigned int WINAPI AcceptThread(LPVOID arg);
 	static unsigned int WINAPI WorkerThread(LPVOID arg);
 
@@ -82,7 +82,7 @@ private:
 
 	DWORD64 m_sessionIDGenerator;
 
-	// ¼³Á¤ ¿É¼Ç º¸°ü
+	// ì„¤ì • ì˜µì…˜ ë³´ê´€
 	DWORD m_maxSessionCount;
 	BOOL m_nagle;
 
