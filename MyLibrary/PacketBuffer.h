@@ -1,175 +1,133 @@
-#pragma once
-/////////////////////////////////////////////////////////////////////
-// www.gamecodi.com						ÀÌÁÖÇà master@gamecodi.com
-//
-//
-/////////////////////////////////////////////////////////////////////
-/*---------------------------------------------------------------
-
-	Packet.
-
-	³×Æ®¿öÅ© ÆĞÅ¶¿ë Å¬·¡½º.
-	°£ÆíÇÏ°Ô ÆĞÅ¶¿¡ ¼ø¼­´ë·Î µ¥ÀÌÅ¸¸¦ In, Out ÇÑ´Ù.
-
-	- »ç¿ë¹ı.
-
-	Packet cPacket;  or CMessage Message;
-
-	³Ö±â.
-	clPacket << 40030;		or	clPacket << iValue;	(int ³Ö±â)
-	clPacket << 1.4;		or	clPacket << fValue;	(float ³Ö±â)
-
-
-	»©±â.
-	clPacket >> iValue;		(int »©±â)
-	clPacket >> byValue;		(BYTE »©±â)
-	clPacket >> fValue;		(float »©±â)
-
-	Packet Packet2;
-
-	!.	»ğÀÔµÇ´Â µ¥ÀÌÅ¸ FIFO ¼ø¼­·Î °ü¸®µÈ´Ù.
-		È¯Çü Å¥´Â ¾Æ´Ï¹Ç·Î, ³Ö±â(<<).»©±â(>>) ¸¦ È¥ÇÕÇØ¼­ »ç¿ëÇÏÁö ¾Êµµ·Ï ÇÑ´Ù
-
-
-
-	* ½ÇÁ¦ ÆĞÅ¶ ÇÁ·Î½ÃÀú¿¡¼­ÀÇ Ã³¸®
-
-	BOOL	netPacketProc_CreateMyCharacter(Packet *clpPacket)
-	{
-		DWORD dwSessionID;
-		short shX, shY;
-		char chHP;
-		BYTE byDirection;
-
-//		*clpPacket >> dwSessionID >> byDirection >> shX >> shY >> chHP;
-
-
-		*clpPacket >> dwSessionID;
-		*clpPacket >> byDirection;
-		*clpPacket >> shX;
-		*clpPacket >> shY;
-		*clpPacket >> chHP;
-
-		...
-		...
-	}
-
-
-	* ½ÇÁ¦ ¸Ş½ÃÁö(ÆĞÅ¶) »ı¼ººÎ¿¡¼­ÀÇ Ã³¸®
-
-	Packet MoveStart;
-	mpMoveStart(&MoveStart, dir, x, y);
-	SendPacket(&MoveStart);
-
-
-	void	mpMoveStart(Packet *clpPacket, BYTE byDirection, short shX, short shY)
-	{
-		st_NETWORK_PACKET_HEADER	stPacketHeader;
-		stPacketHeader.byCode = dfNETWORK_PACKET_CODE;
-		stPacketHeader.bySize = 5;
-		stPacketHeader.byType = dfPACKET_CS_MOVE_START;
-
-		clpPacket->PutData((char *)&stPacketHeader, dfNETWORK_PACKET_HEADER_SIZE);
-
-		*clpPacket << byDirection;
-		*clpPacket << shX;
-		*clpPacket << shY;
-
-	}
-
-----------------------------------------------------------------*/
-#ifndef  __PACKET__
-#define  __PACKET__
+ï»¿#pragma once
 #include <WinSock2.h>
+
+namespace jeongu
+{
+	template <typename T> class LockFreeMemoryPool;
+	template <typename T> class LockFreeMemoryPoolTLS;
+}
+
+/*
+* - LanServerHeader : ì„œë²„ ê°„ í†µì‹ . ê¸¸ì´ë§Œ
+* - NetServerHeader : í´ë¼ì´ì–¸íŠ¸ í†µì‹ . ì¸ì½”ë”© ì •ë³´ í¬í•¨
+*/
+#pragma pack(push, 1)
+struct LanServerHeader
+{
+	unsigned short _len;
+};
+
+struct NetServerHeader
+{
+	unsigned char _byteCode;
+	unsigned short _len;
+	unsigned char _randomKey;
+	unsigned char _checkSum;
+};
+#pragma pack(pop)
+
+/*
+* Packet
+*/
 
 class Packet
 {
+	friend class CLanServer;
+	friend class CNetServer;
+
+	friend class jeongu::LockFreeMemoryPool<Packet>;
+	friend class jeongu::LockFreeMemoryPoolTLS<Packet>;
+
 public:
-
-	/*---------------------------------------------------------------
-	Packet Enum.
-
-	----------------------------------------------------------------*/
 	enum en_PACKET
 	{
-		eBUFFER_DEFAULT = 1400		// ÆĞÅ¶ÀÇ ±âº» ¹öÆÛ »çÀÌÁî.
+		eBUFFER_DEFAULT = 1400,		// íŒ¨í‚·ì˜ ê¸°ë³¸ ë²„í¼ ì‚¬ì´ì¦ˆ.
+		eHEADER_RESERVE = sizeof(NetServerHeader)	// ë²„í¼ ì• í—¤ë” ì˜ˆì•½ ì˜ì—­. ê°€ì¥ í° í—¤ë” ê¸°ì¤€
 	};
 
-	//////////////////////////////////////////////////////////////////////////
-	// »ı¼ºÀÚ, ÆÄ±«ÀÚ.
-	//
-	// Return:
-	//////////////////////////////////////////////////////////////////////////
-	Packet();
-	Packet(int iBufferSize);
+	/**
+	* @brief í’€ì—ì„œ íŒ¨í‚· í• ë‹¹. ì°¸ì¡° ì¹´ìš´íŠ¸ 1 ë¡œ ì‹œì‘ (í• ë‹¹í•œ ìª½ì´ ì°¸ì¡° í•˜ë‚˜ë¥¼ ê°€ì§)
+	* @param ì—†ìŒ
+	* @return (Packet*)ë¹„ì–´ ìˆëŠ” íŒ¨í‚·
+	*/
+	static Packet* Alloc(void);
 
-	virtual	~Packet();
+	/**
+	 * @brief ì°¸ì¡° ë°˜ë‚©. 0 ì´ ë˜ë©´ í’€ë¡œ ë°˜í™˜
+	 * @param (packet)ë°˜ë‚©í•  íŒ¨í‚·
+	 * @return ì—†ìŒ
+	 */
+	static void Free(Packet* packet);
 
+	/**
+	 * @brief ì°¸ì¡° ì¶”ê°€. íŒ¨í‚·ì„ ë‹¤ë¥¸ ê³³(ì„¸ì…˜ sendQ, ë‹¤ë¥¸ ìŠ¤ë ˆë“œ ë“±)ì— ë„˜ê¸¸ ë•Œ í˜¸ì¶œ
+	 * @param ì—†ìŒ
+	 * @return ì—†ìŒ
+	 */
+	void AddRef(void);
 
-	//////////////////////////////////////////////////////////////////////////
-	// ÆĞÅ¶ Ã»¼Ò.
-	//
-	// Parameters: ¾øÀ½.
-	// Return: ¾øÀ½.
-	//////////////////////////////////////////////////////////////////////////
+	// í’€ í†µê³„ (GetUseCount ëŠ” LFMP_STATS ê°€ êº¼ì ¸ ìˆìœ¼ë©´ -1)
+	static LONG64 GetUseCount(void);
+	static DWORD GetCapacityCount(void);
+
+	Packet(const Packet&) = delete;
+
 	void Clear(void);
 
-
 	//////////////////////////////////////////////////////////////////////////
-	// ¹öÆÛ »çÀÌÁî ¾ò±â.
+	// ë²„í¼ ì‚¬ì´ì¦ˆ ì–»ê¸°.
 	//
-	// Parameters: ¾øÀ½.
-	// Return: (int)ÆĞÅ¶ ¹öÆÛ »çÀÌÁî ¾ò±â.
+	// Parameters: ì—†ìŒ.
+	// Return: (int)íŒ¨í‚· ë²„í¼ ì‚¬ì´ì¦ˆ ì–»ê¸°.
 	//////////////////////////////////////////////////////////////////////////
-	int	GetBufferSize(void) const { return m_iBufferSize; }
+	int	GetBufferSize(void) const { return m_iBufferSize - eHEADER_RESERVE; }
 	//////////////////////////////////////////////////////////////////////////
-	// ÇöÀç »ç¿ëÁßÀÎ »çÀÌÁî ¾ò±â.
+	// í˜„ì¬ ì‚¬ìš©ì¤‘ì¸ ì‚¬ì´ì¦ˆ ì–»ê¸°.
 	//
-	// Parameters: ¾øÀ½.
-	// Return: (int)»ç¿ëÁßÀÎ µ¥ÀÌÅ¸ »çÀÌÁî.
+	// Parameters: ì—†ìŒ.
+	// Return: (int)ì‚¬ìš©ì¤‘ì¸ ë°ì´íƒ€ ì‚¬ì´ì¦ˆ.
 	//////////////////////////////////////////////////////////////////////////
 	int GetDataSize(void) const { return m_iDataSize; }
 	//////////////////////////////////////////////////////////////////////////
-	// ¹öÆÛ ÀĞ±â Æ÷ÀÎÅÍ ¾ò±â.
+	// ë²„í¼ ì½ê¸° í¬ì¸í„° ì–»ê¸°.
 	//
-	// Parameters: ¾øÀ½.
-	// Return: (char *)¹öÆÛ Æ÷ÀÎÅÍ.
+	// Parameters: ì—†ìŒ.
+	// Return: (char *)ë²„í¼ í¬ì¸í„°.
 	//////////////////////////////////////////////////////////////////////////
 	char* GetReadPtr(void) { return m_chpBuffer + m_iReadPos; }
 	//////////////////////////////////////////////////////////////////////////
-	// ¹öÆÛ ÀĞ±â Æ÷ÀÎÅÍ ¾ò±â.
+	// ë²„í¼ ì½ê¸° í¬ì¸í„° ì–»ê¸°.
 	//
-	// Parameters: ¾øÀ½.
-	// Return: (char *)¹öÆÛ Æ÷ÀÎÅÍ.
+	// Parameters: ì—†ìŒ.
+	// Return: (char *)ë²„í¼ í¬ì¸í„°.
 	//////////////////////////////////////////////////////////////////////////
 	char* GetWritePtr(void) { return m_chpBuffer + m_iWritePos; }
 
-
 	//////////////////////////////////////////////////////////////////////////
-	// ¹öÆÛ Pos ÀÌµ¿. (À½¼öÀÌµ¿Àº ¾ÈµÊ)
-	// GetBufferPtr ÇÔ¼ö¸¦ ÀÌ¿ëÇÏ¿© ¿ÜºÎ¿¡¼­ °­Á¦·Î ¹öÆÛ ³»¿ëÀ» ¼öÁ¤ÇÒ °æ¿ì »ç¿ë. 
+	// ë²„í¼ Pos ì´ë™. (ìŒìˆ˜ì´ë™ì€ ì•ˆë¨)
+	// GetBufferPtr í•¨ìˆ˜ë¥¼ ì´ìš©í•˜ì—¬ ì™¸ë¶€ì—ì„œ ê°•ì œë¡œ ë²„í¼ ë‚´ìš©ì„ ìˆ˜ì •í•  ê²½ìš° ì‚¬ìš©. 
 	//
-	// Parameters: (int) ÀÌµ¿ »çÀÌÁî.
-	// Return: (int) ÀÌµ¿µÈ »çÀÌÁî.
+	// Parameters: (int) ì´ë™ ì‚¬ì´ì¦ˆ.
+	// Return: (int) ì´ë™ëœ ì‚¬ì´ì¦ˆ.
 	//////////////////////////////////////////////////////////////////////////
 	int	MoveWritePos(int iSize);
 	int	MoveReadPos(int iSize);
 
 
 	/* ============================================================================= */
-	// ¿¬»êÀÚ ¿À¹ö·Îµù
+	// ì—°ì‚°ì ì˜¤ë²„ë¡œë”©
 	/* ============================================================================= */
 	Packet& operator = (Packet& clSrcPacket);
 
 	//////////////////////////////////////////////////////////////////////////
-	// ³Ö±â.	°¢ º¯¼ö Å¸ÀÔ¸¶´Ù ¸ğµÎ ¸¸µë.
+	// ë„£ê¸°.	ê° ë³€ìˆ˜ íƒ€ì…ë§ˆë‹¤ ëª¨ë‘ ë§Œë“¬.
 	//////////////////////////////////////////////////////////////////////////
 	__forceinline Packet& operator << (unsigned char byValue)
 	{
 		_Push(&byValue, sizeof(byValue));
 		return *this;
 	}
-	__forceinline Packet& operator << (char chValue) 
+	__forceinline Packet& operator << (char chValue)
 	{
 		_Push(&chValue, sizeof(chValue));
 		return *this;
@@ -216,7 +174,7 @@ public:
 	}
 
 	//////////////////////////////////////////////////////////////////////////
-	// »©±â.	°¢ º¯¼ö Å¸ÀÔ¸¶´Ù ¸ğµÎ ¸¸µë.
+	// ë¹¼ê¸°.	ê° ë³€ìˆ˜ íƒ€ì…ë§ˆë‹¤ ëª¨ë‘ ë§Œë“¬.
 	//////////////////////////////////////////////////////////////////////////
 
 	__forceinline Packet& operator>>(BYTE& byValue)
@@ -273,26 +231,48 @@ public:
 
 
 	//////////////////////////////////////////////////////////////////////////
-	// µ¥ÀÌÅ¸ ¾ò±â.
+	// ë°ì´íƒ€ ì–»ê¸°.
 	//
-	// Parameters: (char *)Dest Æ÷ÀÎÅÍ. (int)Size.
-	// Return: (int)º¹»çÇÑ »çÀÌÁî.
+	// Parameters: (char *)Dest í¬ì¸í„°. (int)Size.
+	// Return: (int)ë³µì‚¬í•œ ì‚¬ì´ì¦ˆ.
 	//////////////////////////////////////////////////////////////////////////
 	int	GetData(char* chpDest, int iSize);
 
 	//////////////////////////////////////////////////////////////////////////
-	// µ¥ÀÌÅ¸ »ğÀÔ.
+	// ë°ì´íƒ€ ì‚½ì….
 	//
-	// Parameters: (char *)Src Æ÷ÀÎÅÍ. (int)SrcSize.
-	// Return: (int)º¹»çÇÑ »çÀÌÁî.
+	// Parameters: (char *)Src í¬ì¸í„°. (int)SrcSize.
+	// Return: (int)ë³µì‚¬í•œ ì‚¬ì´ì¦ˆ.
 	//////////////////////////////////////////////////////////////////////////
 	int	PutData(char* chpSrc, int iSrcSize);
 
+private:
+	Packet();
+	Packet(int iBufferSize);
+	virtual	~Packet();
+
 protected:
+	/**
+	 * @brief Lan í—¤ë” ê¸°ë¡ (ê¸¸ì´ë§Œ). í˜ì´ë¡œë“œ ë°”ë¡œ ì•ì— ë¶™ì„
+	 */
+	void SetLanHeader(void);
+
+	/**
+	 * @brief Net í—¤ë” ê¸°ë¡ + ì¸ì½”ë”© (1íšŒë§Œ)
+	 * @note í‹€ë§Œ ì¡ì•„ ë‘ . í—¤ë” í•„ë“œ ê°’ / ì¸ì½”ë”© ë°©ì‹ì€ ì¶”í›„ êµ¬í˜„
+	 *       í”Œë˜ê·¸ í™•ì¸ì´ ì›ìì ì´ì§€ ì•ŠìŒ : ì—¬ëŸ¬ ìŠ¤ë ˆë“œê°€ ê°™ì€ íŒ¨í‚·ì„ ë™ì‹œì— SendPacket í•˜ë©´ ì´ì¤‘ ì¸ì½”ë”© (ì¶”í›„ ê²°ì •)
+	 */
+	void SetNetHeader(void);
+	void Encode(void);
+	void Decode(void);
+
+	char* GetSendPtr(void) { return m_chpBuffer + eHEADER_RESERVE - m_iHeaderSize; }
+	int GetSendSize(void) const { return m_iHeaderSize + (m_iWritePos - eHEADER_RESERVE); }
+
 	__forceinline bool _Push(const void* pSrc, int iSize)
 	{
 		if (iSize <= 0) return true;
-		int freeSize = m_iBufferSize - m_iDataSize;
+		int freeSize = m_iBufferSize - m_iWritePos;
 		if (freeSize < iSize) return false;
 
 		memcpy(m_chpBuffer + m_iWritePos, pSrc, iSize);
@@ -315,8 +295,8 @@ protected:
 
 		if (m_iDataSize == 0)
 		{
-			m_iWritePos = 0;
-			m_iReadPos = 0;
+			m_iWritePos = eHEADER_RESERVE;
+			m_iReadPos = eHEADER_RESERVE;
 		}
 
 		return true;
@@ -326,15 +306,10 @@ protected:
 protected:
 	char* m_chpBuffer;
 	int	m_iBufferSize;
-
-	//------------------------------------------------------------
-	// ÇöÀç ¹öÆÛ¿¡ »ç¿ëÁßÀÎ »çÀÌÁî.
-	//------------------------------------------------------------
 	int	m_iDataSize;
 	int m_iReadPos;
 	int m_iWritePos;
+	int m_iHeaderSize;
+	bool m_bEncoded;
+	volatile LONG m_refCount;
 };
-
-
-
-#endif
