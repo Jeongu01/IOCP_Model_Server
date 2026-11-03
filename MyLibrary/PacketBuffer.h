@@ -32,6 +32,10 @@ struct NetServerHeader
 
 class Packet
 {
+protected:
+	static constexpr unsigned char PACKET_CODE = 0x77;
+	static constexpr unsigned char FIXED_KEY = 0x32;
+
 	friend class CLanServer;
 	friend class CNetServer;
 
@@ -87,7 +91,7 @@ public:
 	// Parameters: 없음.
 	// Return: (int)사용중인 데이타 사이즈.
 	//////////////////////////////////////////////////////////////////////////
-	int GetDataSize(void) const { return m_iDataSize; }
+	int GetDataSize(void) const { return m_iWritePos - m_iReadPos; }
 	//////////////////////////////////////////////////////////////////////////
 	// 버퍼 읽기 포인터 얻기.
 	//
@@ -264,7 +268,9 @@ protected:
 	 */
 	void SetNetHeader(void);
 	void Encode(void);
-	void Decode(void);
+	bool Decode(void);
+
+	char* GetBufferPtr(void) { return m_chpBuffer; }
 
 	char* GetSendPtr(void) { return m_chpBuffer + eHEADER_RESERVE - m_iHeaderSize; }
 	int GetSendSize(void) const { return m_iHeaderSize + (m_iWritePos - eHEADER_RESERVE); }
@@ -277,7 +283,6 @@ protected:
 
 		memcpy(m_chpBuffer + m_iWritePos, pSrc, iSize);
 
-		m_iDataSize += iSize;
 		m_iWritePos += iSize;
 
 		return true;
@@ -286,14 +291,13 @@ protected:
 	__forceinline bool _Pop(void* pDest, int iSize)
 	{
 		if (iSize <= 0) return true;
-		if (m_iDataSize < iSize) return false;
+		if (m_iWritePos - m_iReadPos < iSize) return false;
 
 		memcpy(pDest, m_chpBuffer + m_iReadPos, iSize);
 
-		m_iDataSize -= iSize;
 		m_iReadPos += iSize;
 
-		if (m_iDataSize == 0)
+		if (m_iWritePos == m_iReadPos)
 		{
 			m_iWritePos = eHEADER_RESERVE;
 			m_iReadPos = eHEADER_RESERVE;
@@ -306,7 +310,6 @@ protected:
 protected:
 	char* m_chpBuffer;
 	int	m_iBufferSize;
-	int	m_iDataSize;
 	int m_iReadPos;
 	int m_iWritePos;
 	int m_iHeaderSize;

@@ -1,5 +1,7 @@
 ﻿#include "PacketBuffer.h"
 #include "LockFreeMemoryPoolTLS.h"
+#include <cstddef>
+#include <cstdlib>
 
 namespace
 {
@@ -32,7 +34,6 @@ Packet::~Packet()
 
 void Packet::Clear(void)
 {
-	m_iDataSize = 0;
 	m_iReadPos = eHEADER_RESERVE;
 	m_iWritePos = eHEADER_RESERVE;
 	m_iHeaderSize = 0;
@@ -48,7 +49,6 @@ int Packet::MoveWritePos(int iSize)
 	if (freeSize < iSize)
 		iSize = freeSize;
 
-	m_iDataSize += iSize;
 	m_iWritePos += iSize;
 
 	return iSize;
@@ -59,13 +59,13 @@ int Packet::MoveReadPos(int iSize)
 	if (iSize <= 0)
 		return 0;
 
-	if (m_iDataSize < iSize)
-		iSize = m_iDataSize;
+	int dataSize = m_iWritePos - m_iReadPos;
+	if (dataSize < iSize)
+		iSize = dataSize;
 
-	m_iDataSize -= iSize;
 	m_iReadPos += iSize;
 
-	if (m_iDataSize == 0)
+	if (m_iWritePos == m_iReadPos)
 	{
 		m_iWritePos = eHEADER_RESERVE;
 		m_iReadPos = eHEADER_RESERVE;
@@ -88,7 +88,6 @@ Packet& Packet::operator=(Packet& clSrcPacket)
 
 	memcpy(m_chpBuffer, clSrcPacket.m_chpBuffer, clSrcPacket.m_iBufferSize);
 
-	m_iDataSize = clSrcPacket.m_iDataSize;
 	m_iReadPos = clSrcPacket.m_iReadPos;
 	m_iWritePos = clSrcPacket.m_iWritePos;
 	m_iHeaderSize = clSrcPacket.m_iHeaderSize;
@@ -102,15 +101,15 @@ int Packet::GetData(char* chpDest, int iSize)
 	if (iSize <= 0)
 		return 0;
 
-	if (m_iDataSize < iSize)
-		iSize = m_iDataSize;
+	int dataSize = m_iWritePos - m_iReadPos;
+	if (dataSize < iSize)
+		iSize = dataSize;
 
 	memcpy(chpDest, m_chpBuffer + m_iReadPos, iSize);
 
-	m_iDataSize -= iSize;
 	m_iReadPos += iSize;
 
-	if (m_iDataSize == 0)
+	if (m_iWritePos == m_iReadPos)
 	{
 		m_iReadPos = eHEADER_RESERVE;
 		m_iWritePos = eHEADER_RESERVE;
@@ -130,7 +129,6 @@ int Packet::PutData(char* chpSrc, int iSrcSize)
 
 	memcpy(m_chpBuffer + m_iWritePos, chpSrc, iSrcSize);
 
-	m_iDataSize += iSrcSize;
 	m_iWritePos += iSrcSize;
 
 	return iSrcSize;
@@ -139,7 +137,7 @@ int Packet::PutData(char* chpSrc, int iSrcSize)
 void Packet::SetLanHeader(void)
 {
 	LanServerHeader header;
-	header._len = (unsigned short)m_iDataSize;
+	header._len = (unsigned short)(m_iWritePos - eHEADER_RESERVE);
 
 	memcpy(m_chpBuffer + eHEADER_RESERVE - sizeof(LanServerHeader), &header, sizeof(LanServerHeader));
 	m_iHeaderSize = sizeof(LanServerHeader);
@@ -147,30 +145,71 @@ void Packet::SetLanHeader(void)
 
 void Packet::SetNetHeader(void)
 {
-	if (m_bEncoded)
+	if (m_bEncoded == true)
 		return;
-	m_bEncoded = true;
 
 	NetServerHeader header;
-	header._byteCode = 0;		// TODO
-	header._len = (unsigned short)m_iDataSize;
-	header._randomKey = 0;		// TODO
-	header._checkSum = 0;		// TODO
+	header._byteCode = PACKET_CODE;
+	header._len = (unsigned short)(m_iWritePos - eHEADER_RESERVE);
+	header._randomKey = (unsigned char)(rand());
+	header._checkSum = 0;
+
+	for (int i = eHEADER_RESERVE; i < m_iWritePos; i++)
+	{
+		header._checkSum += (unsigned char)m_chpBuffer[i];
+	}
 
 	memcpy(m_chpBuffer + eHEADER_RESERVE - sizeof(NetServerHeader), &header, sizeof(NetServerHeader));
 	m_iHeaderSize = sizeof(NetServerHeader);
 
 	Encode();
+
+	m_bEncoded = true;
 }
 
 void Packet::Encode(void)
 {
-	// TODO
+	NetServerHeader* header = (NetServerHeader*)m_chpBuffer;
+
+	unsigned char* data = (unsigned char*)m_chpBuffer + offsetof(NetServerHeader, _checkSum);
+	int size = header->_len + 1;
+
+	unsigned char p = 0;
+	unsigned char e = 0;
+	for (int i = 0; i < size; i++)
+	{
+		unsigned char n = (unsigned char)(i + 1);
+		p = data[i] ^ (unsigned char)(p + header->_randomKey + n);
+		e = p ^ (unsigned char)(e + FIXED_KEY + n);
+		data[i] = e;
+	}
 }
 
-void Packet::Decode(void)
+bool Packet::Decode(void)
 {
-	// TODO
+	NetServerHeader* header = (NetServerHeader*)m_chpBuffer;
+
+	unsigned char* data = (unsigned char*)m_chpBuffer + offsetof(NetServerHeader, _checkSum);
+	int size = header->_len + 1;
+
+	unsigned char prevP = 0;
+	unsigned char prevE = 0;
+	for (int i = 0; i < size; i++)
+	{
+		unsigned char n = (unsigned char)(i + 1);
+		unsigned char e = data[i];
+		unsigned char p = e ^ (unsigned char)(prevE + FIXED_KEY + n);
+		data[i] = p ^ (unsigned char)(prevP + header->_randomKey + n);
+		prevP = p;
+		prevE = e;
+	}
+
+	unsigned char checkSum = 0;
+	for (int i = 1; i < size; i++)
+	{
+		checkSum += data[i];
+	}
+	return checkSum == data[0];
 }
 
 Packet* Packet::Alloc(void)
