@@ -301,8 +301,7 @@ void CNetServer::WorkerThreadMain()
 		// 에러 및 끊김 처리
 		if (retval == FALSE || cbTransferred == 0)
 		{
-			if (InterlockedDecrement(&session->ioCount) == 0)
-				ReleaseSession(session);
+			ReturnSession(session);
 			continue;
 		}
 
