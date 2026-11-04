@@ -89,10 +89,20 @@ void ChatServer::ProcessRelease(DWORD64 sessionID)
 		return;
 
 	if (player->sectorX != INVALID_SECTOR)
-		_sectors[player->sectorY][player->sectorX].erase(player->sectorIter);
+	{
+		auto& sector = _sectors[player->sectorY][player->sectorX];
+		Player* last = sector.back();
+		sector[player->sectorIndex] = last;
+		last->sectorIndex = player->sectorIndex;
+		sector.pop_back();
+	}
 
-	if (player->isLogin)
-		_accountMap.erase(player->accountNo);
+	if (player->isLogin == TRUE)
+	{
+		auto iter = _accountMap.find(player->accountNo);
+		if (iter != _accountMap.end())
+			_accountMap.erase(player->accountNo);
+	}
 
 	_sessionMap.erase(sessionID);
 	delete player;	// 메모리풀로 변경
@@ -135,6 +145,9 @@ void ChatServer::PacketProc(DWORD64 sessionID, Packet* packet)
 	case en_PACKET_CS_CHAT_REQ_HEARTBEAT:
 		PacketProcHeartbeat(player, packet);
 		break;
+	default:
+		DisconnectPlayer(player);
+		break;
 	}
 }
 
@@ -143,18 +156,27 @@ void ChatServer::PacketProcLogin(Player* player, Packet* packet)
 	INT64 accountNo;
 	BYTE status = 1;
 
-	(*packet) >> accountNo;
+	// 같은 세션 중복 로그인
+	if (player->isLogin == TRUE)
+	{
+		DisconnectPlayer(player);
+		return;
+	}
 
-	if (player->isLogin)
-		status = 0;
+	// 이상한 패킷
+	if (packet->GetDataSize() != sizeof(accountNo) + sizeof(player->id)
+		+ sizeof(player->nickname) + sizeof(player->sessionKey))
+	{
+		DisconnectPlayer(player);
+		return;
+	}
+
+	(*packet) >> accountNo;
 
 	Packet* resPacket = Packet::Alloc();
 	mpResLogin(resPacket, status, accountNo);
 	SendPacket(player->sessionId, resPacket);
 	Packet::Free(resPacket);
-
-	if (status == 0)
-		return;
 
 	packet->GetData((char*)player->id, sizeof(player->id));
 	packet->GetData((char*)player->nickname, sizeof(player->nickname));
@@ -162,6 +184,11 @@ void ChatServer::PacketProcLogin(Player* player, Packet* packet)
 
 	player->accountNo = accountNo;
 	player->isLogin = TRUE;
+
+	// 다른 세션 같은 계정 로그인 -> 기존 계정 끊음
+	auto iter = _accountMap.find(accountNo);
+	if (iter != _accountMap.end())
+		DisconnectPlayer(iter->second);
 	_accountMap[accountNo] = player;
 }
 
@@ -169,15 +196,45 @@ void ChatServer::PacketProcSectorMove(Player* player, Packet* packet)
 {
 	INT64 accountNo;
 	WORD sectorX, sectorY;
+
+	// 로그인 후 이동 가능
+	// 이상한 패킷
+	if (player->isLogin == FALSE
+		|| packet->GetDataSize() != sizeof(accountNo) + sizeof(sectorX) + sizeof(sectorY))
+	{
+		DisconnectPlayer(player);
+		return;
+	}
+
 	(*packet) >> accountNo >> sectorX >> sectorY;
 
-	// TODO : 이동 가능한 섹터인지 검증
+	// 패킷의 accountNo와 서버가 관리중인 accountNo가 다름
+	if (accountNo != player->accountNo)
+	{
+		__debugbreak();
+	}
 
+	// 섹터 범위 이상
+	if (sectorX >= SECTOR_MAX_X || sectorY >= SECTOR_MAX_Y)
+	{
+		DisconnectPlayer(player);
+		return;
+	}
+
+	// 이동 처리
 	if (player->sectorX != INVALID_SECTOR)
-		_sectors[player->sectorY][player->sectorX].erase(player->sectorIter);
+	{
+		auto& sector = _sectors[player->sectorY][player->sectorX];
+		Player* last = sector.back();
+		sector[player->sectorIndex] = last;
+		last->sectorIndex = player->sectorIndex;
+		sector.pop_back();
+	}
 
 	auto& sector = _sectors[sectorY][sectorX];
-	player->sectorIter = sector.insert(sector.end(), player);
+	player->sectorIndex = (DWORD)sector.size();
+	sector.push_back(player);
+
 	player->sectorX = sectorX;
 	player->sectorY = sectorY;
 
@@ -193,16 +250,32 @@ void ChatServer::PacketProcMessage(Player* player, Packet* packet)
 	WORD msgLen;
 	WCHAR message[512];
 
+	// 로그인 후 채팅 가능
+	// 첫 이동 패킷 이후 채팅 가능
+	// 이상한 패킷
+	if (player->isLogin == FALSE
+		|| player->sectorX == INVALID_SECTOR
+		|| packet->GetDataSize() < sizeof(accountNo) + sizeof(msgLen))
+	{
+		DisconnectPlayer(player);
+		return;
+	}
+
 	(*packet) >> accountNo >> msgLen;
-	if (msgLen > sizeof(message))
+
+	// 패킷의 accountNo와 서버가 관리중인 accountNo가 다름
+	if (accountNo != player->accountNo)
+	{
+		__debugbreak();
+	}
+
+	// 메시지 길이 부적절
+	if (msgLen > sizeof(message) || msgLen != packet->GetDataSize())
 	{
 		DisconnectPlayer(player);
 		return;
 	}
 	packet->GetData((char*)message, msgLen);
-
-	if (player->sectorX == INVALID_SECTOR)
-		return;
 
 	Packet* resPacket = Packet::Alloc();
 	mpResMessage(resPacket, player->accountNo, player->id, player->nickname, msgLen, message);
@@ -275,4 +348,20 @@ void ChatServer::HandleJob(Job& job)
 		Packet::Free(job.packet);
 		break;
 	}
+}
+
+Player* ChatServer::FindPlayer(DWORD64 sessionID)
+{
+	auto iter = _sessionMap.find(sessionID);
+	if (iter == _sessionMap.end())
+		return nullptr;
+	return iter->second;
+}
+
+void ChatServer::DisconnectPlayer(Player* player)
+{
+	if (player->isDisconnecting)
+		return;
+	player->isDisconnecting = TRUE;
+	Disconnect(player->sessionId);
 }

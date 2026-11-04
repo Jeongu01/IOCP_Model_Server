@@ -1,6 +1,5 @@
 ﻿#pragma once
 #include <Windows.h>
-#include <list>
 
 #define ID_MAX_SIZE			20
 #define NICK_NAME_MAX_SIZE	20
@@ -17,7 +16,7 @@ struct Player
 
 	WORD sectorX;
 	WORD sectorY;
-	std::list<Player*>::iterator sectorIter;
+	DWORD sectorIndex;
 	
 	ULONGLONG lastRecvTime;
 	BOOL isLogin;
@@ -31,6 +30,7 @@ struct Player
 		nickname[0] = '\0';
 		sectorX = INVALID_SECTOR;
 		sectorY = INVALID_SECTOR;
+		sectorIndex = 0;
 		lastRecvTime = now;
 		isLogin = FALSE;
 		isDisconnecting = FALSE;

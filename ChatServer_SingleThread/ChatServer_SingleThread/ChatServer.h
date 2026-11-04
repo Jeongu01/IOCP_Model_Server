@@ -3,7 +3,7 @@
 #include "Player.h"
 #include "CommonProtocol.h"
 #include <unordered_map>
-#include <list>
+#include <vector>
 #include "LockFreeQueue.h"
 
 #define SECTOR_MAX_X		50
@@ -60,26 +60,13 @@ private:
 	void PushJob(Job::Type type, DWORD64 sessionID, Packet* packet);
 	void HandleJob(Job& job);
 
-	Player* FindPlayer(DWORD64 sessionID)
-	{
-		auto iter = _sessionMap.find(sessionID);
-		if (iter == _sessionMap.end())
-			return nullptr;
-		return iter->second;
-	}
-
-	void DisconnectPlayer(Player* player)
-	{
-		if (player->isDisconnecting)
-			return;
-		player->isDisconnecting = TRUE;
-		Disconnect(player->sessionId);
-	}
+	Player* FindPlayer(DWORD64 sessionID);
+	void DisconnectPlayer(Player* player);
 
 private:
 	std::unordered_map<DWORD64, Player*> _sessionMap;
 	std::unordered_map<INT64, Player*> _accountMap;
-	std::list<Player*> _sectors[SECTOR_MAX_Y][SECTOR_MAX_X];
+	std::vector<Player*> _sectors[SECTOR_MAX_Y][SECTOR_MAX_X];
 
 	LockFreeQueue<Job> _jobQueue;
 	HANDLE _jobEvent = NULL;
