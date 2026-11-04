@@ -250,24 +250,7 @@ void CNetServer::AcceptThreadMain()
 
 		// 첫 WSARecv
 		InterlockedIncrement(&session->ioCount);
-		flags = 0;
-		wsabuf.buf = session->recvQ.GetRearBufferPtr();
-		wsabuf.len = session->recvQ.DirectEnqueueSize();
-
-		ZeroMemory(&session->recvOverlapped.overlapped, sizeof(OVERLAPPED));
-		int retval = WSARecv(client_sock, &wsabuf, 1, NULL, &flags, (OVERLAPPED*)&session->recvOverlapped, NULL);
-		if (retval == SOCKET_ERROR)
-		{
-			int errCode = WSAGetLastError();
-			if (errCode != ERROR_IO_PENDING)
-			{
-				if (errCode != WSAECONNRESET)
-				{
-					__debugbreak();
-				}
-				InterlockedDecrement(&session->ioCount);
-			}
-		}
+		RecvPost(session);
 
 		ReturnSession(session);
 	}
@@ -419,44 +402,7 @@ void CNetServer::RecvProc(Session* session, DWORD cbTransferred)
 		Packet::Free(recvPacket);
 	}
 
-	// WSARecv 재등록
-	WSABUF wsabuf[2];
-	DWORD flags = 0;
-	int recvQFreeSize = session->recvQ.GetFreeSize();
-	int recvQDirectSize = session->recvQ.DirectEnqueueSize();
-
-	wsabuf[0].buf = session->recvQ.GetRearBufferPtr();
-	wsabuf[0].len = recvQDirectSize;
-
-	int retval = 0;
-	ZeroMemory(&session->recvOverlapped.overlapped, sizeof(OVERLAPPED));
-	if (recvQFreeSize == recvQDirectSize)
-	{
-		retval = WSARecv(session->sock, wsabuf, 1, NULL, &flags, (OVERLAPPED*)&session->recvOverlapped, NULL);
-	}
-	else if (recvQFreeSize > recvQDirectSize)
-	{
-		wsabuf[1].buf = session->recvQ.GetBufferPtr();
-		wsabuf[1].len = recvQFreeSize - recvQDirectSize;
-		retval = WSARecv(session->sock, wsabuf, 2, NULL, &flags, (OVERLAPPED*)&session->recvOverlapped, NULL);
-	}
-
-	if (retval == SOCKET_ERROR)
-	{
-		int errCode = WSAGetLastError();
-		if (errCode != WSA_IO_PENDING)
-		{
-			if (errCode != WSAECONNRESET)
-			{
-				__debugbreak();
-			}
-			if (InterlockedDecrement(&session->ioCount) == 0)
-			{
-				ReleaseSession(session);
-				return;
-			}
-		}
-	}
+	RecvPost(session);
 }
 
 void CNetServer::SendProc(Session* session, DWORD cbTransferred)
@@ -471,6 +417,40 @@ void CNetServer::SendProc(Session* session, DWORD cbTransferred)
 
 	if (InterlockedDecrement(&session->ioCount) == 0)
 		ReleaseSession(session);
+}
+
+void CNetServer::RecvPost(Session* session)
+{
+	WSABUF wsabuf[2];
+	DWORD flags = 0;
+	int recvQFreeSize = session->recvQ.GetFreeSize();
+	int recvQDirectSize = session->recvQ.DirectEnqueueSize();
+
+	wsabuf[0].buf = session->recvQ.GetRearBufferPtr();
+	wsabuf[0].len = recvQDirectSize;
+	int bufCount = 1;
+
+	if (recvQFreeSize > recvQDirectSize)
+	{
+		wsabuf[1].buf = session->recvQ.GetBufferPtr();
+		wsabuf[1].len = recvQFreeSize - recvQDirectSize;
+		bufCount = 2;
+	}
+
+	ZeroMemory(&session->recvOverlapped.overlapped, sizeof(OVERLAPPED));
+	int retval = WSARecv(session->sock, wsabuf, bufCount, NULL, &flags, (OVERLAPPED*)&session->recvOverlapped, NULL);
+	if (retval == SOCKET_ERROR)
+	{
+		int errCode = WSAGetLastError();
+		if (errCode != WSA_IO_PENDING)
+		{
+			if (errCode != WSAECONNRESET)
+			{
+				__debugbreak();
+			}
+			ReturnSession(session);
+		}
+	}
 }
 
 void CNetServer::SendPost(Session* session)

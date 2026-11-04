@@ -69,6 +69,7 @@ private:
 	void RecvProc(Session* session, DWORD cbTransferred);
 	void SendProc(Session* session, DWORD cbTransferred);
 
+	void RecvPost(Session* session);
 	void SendPost(Session* session);
 
 private:
