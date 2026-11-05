@@ -5,6 +5,7 @@
 #include <unordered_map>
 #include <vector>
 #include "LockFreeQueue.h"
+#include "LockFreeMemoryPoolTLS.h"
 
 #define SECTOR_MAX_X		50
 #define SECTOR_MAX_Y		50
@@ -58,7 +59,7 @@ private:
 	void mpResMessage(Packet* packet, INT64 accountNo, const WCHAR* id, const WCHAR* nickname, WORD msgLen, const WCHAR* message);
 
 	void PushJob(Job::Type type, DWORD64 sessionID, Packet* packet);
-	void HandleJob(Job& job);
+	void HandleJob(Job* job);
 
 	Player* FindPlayer(DWORD64 sessionID);
 	void DisconnectPlayer(Player* player);
@@ -68,9 +69,12 @@ private:
 	std::unordered_map<INT64, Player*> _accountMap;
 	std::vector<Player*> _sectors[SECTOR_MAX_Y][SECTOR_MAX_X];
 
-	LockFreeQueue<Job> _jobQueue;
+	LockFreeQueue<Job*> _jobQueue;
 	HANDLE _jobEvent = NULL;
 	HANDLE _contentsThread = NULL;
 	bool _isRunning = false;
+
+	jeongu::LockFreeMemoryPoolTLS<Player> _playerPool{ false, 10000, 0 };
+	jeongu::LockFreeMemoryPoolTLS<Job> _jobPool{ false, 5000, 0 };
 };
 

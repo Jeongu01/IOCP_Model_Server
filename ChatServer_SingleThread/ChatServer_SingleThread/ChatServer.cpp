@@ -36,9 +36,12 @@ void ChatServer::ContentsThreadMain()
 	{
 		::WaitForSingleObject(_jobEvent, 1000);
 
-		Job job;
+		Job* job;
 		while (_jobQueue.Dequeue(job))
+		{
 			HandleJob(job);
+			_jobPool.Free(job);
+		}
 
 		ULONGLONG now = GetTickCount64();
 		if (now - prev >= 1000)
@@ -77,7 +80,7 @@ void ChatServer::OnError(int errorCode, std::wstring errorMsg)
 
 void ChatServer::ProcessAccept(DWORD64 sessionID)
 {
-	Player* player = new Player;	// 메모리풀로 변경
+	Player* player = _playerPool.Alloc();
 	player->Init(sessionID, GetTickCount64());
 	_sessionMap[sessionID] = player;
 }
@@ -105,7 +108,7 @@ void ChatServer::ProcessRelease(DWORD64 sessionID)
 	}
 
 	_sessionMap.erase(sessionID);
-	delete player;	// 메모리풀로 변경
+	_playerPool.Free(player);
 }
 
 void ChatServer::CheckTimeout()
@@ -325,27 +328,27 @@ void ChatServer::mpResMessage(Packet* packet, INT64 accountNo, const WCHAR* id, 
 
 void ChatServer::PushJob(Job::Type type, DWORD64 sessionID, Packet* packet)
 {
-	Job job;
-	job.type = type;
-	job.sessionID = sessionID;
-	job.packet = packet;
+	Job* job = _jobPool.Alloc();
+	job->type = type;
+	job->sessionID = sessionID;
+	job->packet = packet;
 	_jobQueue.Enqueue(job);
 	SetEvent(_jobEvent);
 }
 
-void ChatServer::HandleJob(Job& job)
+void ChatServer::HandleJob(Job* job)
 {
-	switch (job.type)
+	switch (job->type)
 	{
 	case Job::ACCEPT:
-		ProcessAccept(job.sessionID);
+		ProcessAccept(job->sessionID);
 		break;
 	case Job::RELEASE:
-		ProcessRelease(job.sessionID);
+		ProcessRelease(job->sessionID);
 		break;
 	case Job::RECV:
-		PacketProc(job.sessionID, job.packet);
-		Packet::Free(job.packet);
+		PacketProc(job->sessionID, job->packet);
+		Packet::Free(job->packet);
 		break;
 	}
 }
